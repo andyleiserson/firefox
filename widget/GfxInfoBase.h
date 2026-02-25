@@ -123,6 +123,10 @@ class GfxInfoBase : public nsIGfxInfo,
   // their own GL context during startup.
   virtual void ReportGLStrings(gfx::GfxInfoGLStrings&& aStrings) {}
 
+  void ReportWebgpuAdapter(bool aIsFallback, nsCString&& aJson);
+  NS_IMETHOD GetWebgpuDefaultAdapterJson(nsACString& aResult) override;
+  NS_IMETHOD GetWebgpuFallbackAdapterJson(nsACString& aResult) override;
+
   // Convenience to get the application version
   static const nsCString& GetApplicationVersion();
 
@@ -181,6 +185,8 @@ class GfxInfoBase : public nsIGfxInfo,
   int32_t mMinRefreshRate = 0;
   int32_t mMaxRefreshRate = 0;
   nsCString mCodecSupportInfo;
+  nsCString mWebgpuDefaultAdapterJson;
+  nsCString mWebgpuFallbackAdapterJson;
 
  private:
   virtual int32_t FindBlocklistedDeviceInList(

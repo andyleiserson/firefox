@@ -5,7 +5,7 @@
 use crate::{
     error::{error_to_string, ErrMsg, ErrorBuffer, ErrorBufferType, OwnedErrorBuffer},
     make_byte_buf,
-    telemetry::build_telemetry_struct,
+    telemetry,
     wgpu_string, AdapterInformation, BufferMapResult, ByteBuf, CommandEncoderAction, DeviceAction,
     FfiSlice, Message, PipelineError, QueueWriteAction, QueueWriteDataSource, ServerMessage,
     ShaderModuleCompilationMessage, SwapChainId, TextureAction,
@@ -169,7 +169,7 @@ pub extern "C" fn wgpu_server_new(owner: WebGPUParentPtr) -> *mut Global {
             },
             display: None,
         },
-        Some(build_telemetry_struct()),
+        Some(telemetry::get_wgpu_hooks()),
     );
     let global = Global { owner, global };
     Box::into_raw(Box::new(global))
@@ -2645,6 +2645,7 @@ unsafe fn process_message(
             power_preference,
             force_fallback_adapter,
         } => {
+            #[allow(unused_mut)]
             let mut result = None;
 
             // Prefer to use the dx12 backend, if one exists, and use the same DXGI adapter as WebRender.
@@ -2695,19 +2696,23 @@ unsafe fn process_message(
                 compatible_surface: None,
                 apply_limit_buckets: false,
             };
-            if result.is_none() {
-                let created =
-                    match global.request_adapter(&desc, wgt::Backends::PRIMARY, Some(adapter_id)) {
-                        Ok(_) => true,
-                        Err(e) => {
-                            log::warn!("{e}");
-                            false
-                        }
-                    };
-                result = Some(created);
-            }
+            let result = result.unwrap_or_else(|| {
+                match global.request_adapter(&desc, wgt::Backends::PRIMARY, Some(adapter_id)) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        log::warn!("{e}");
+                        false
+                    }
+                }
+            });
 
-            let response = if result.unwrap() {
+            let response = if result {
+                let features = global.adapter_features(adapter_id).features_webgpu;
+                let info = global.adapter_get_info(adapter_id);
+                let limits = global.adapter_limits(adapter_id);
+
+                telemetry::report_adapter(features, &info, &limits);
+
                 let wgt::AdapterInfo {
                     name,
                     vendor,
@@ -2721,7 +2726,7 @@ unsafe fn process_message(
                     subgroup_min_size,
                     subgroup_max_size,
                     limit_bucket: _,
-                } = global.adapter_get_info(adapter_id);
+                } = info;
 
                 let is_hardware = match device_type {
                     wgt::DeviceType::IntegratedGpu | wgt::DeviceType::DiscreteGpu => true,

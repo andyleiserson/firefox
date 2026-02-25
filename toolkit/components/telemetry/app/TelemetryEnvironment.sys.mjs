@@ -397,6 +397,7 @@ const BACKGROUND_UPDATE_PREF_CHANGE_TOPIC =
   UpdateUtils.PER_INSTALLATION_PREFS["app.update.background.enabled"]
     .observerTopic;
 const SERVICES_INFO_CHANGE_TOPIC = "sync-ui-state:update";
+const WEBGPU_ADAPTER_READY_TOPIC = "webgpu-adapter-ready";
 
 /**
  * Get the current browser locale.
@@ -979,6 +980,7 @@ EnvironmentCache.prototype = {
     Services.obs.addObserver(this, AUTO_UPDATE_PREF_CHANGE_TOPIC);
     Services.obs.addObserver(this, BACKGROUND_UPDATE_PREF_CHANGE_TOPIC);
     Services.obs.addObserver(this, SERVICES_INFO_CHANGE_TOPIC);
+    Services.obs.addObserver(this, WEBGPU_ADAPTER_READY_TOPIC);
   },
 
   _removeObservers() {
@@ -997,6 +999,7 @@ EnvironmentCache.prototype = {
     Services.obs.removeObserver(this, AUTO_UPDATE_PREF_CHANGE_TOPIC);
     Services.obs.removeObserver(this, BACKGROUND_UPDATE_PREF_CHANGE_TOPIC);
     Services.obs.removeObserver(this, SERVICES_INFO_CHANGE_TOPIC);
+    Services.obs.removeObserver(this, WEBGPU_ADAPTER_READY_TOPIC);
   },
 
   observe(aSubject, aTopic, aData) {
@@ -1075,6 +1078,9 @@ EnvironmentCache.prototype = {
         break;
       case SERVICES_INFO_CHANGE_TOPIC:
         this._updateServicesInfo();
+        break;
+      case WEBGPU_ADAPTER_READY_TOPIC:
+        this._updateWebgpuAdapters();
         break;
     }
   },
@@ -1538,6 +1544,22 @@ EnvironmentCache.prototype = {
     };
     Glean.fxa.syncEnabled.set(syncEnabled);
     Glean.fxa.accountEnabled.set(accountEnabled);
+  },
+
+  _updateWebgpuAdapters() {
+    try {
+      let gfxInfo = Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo);
+      let defaultJson = gfxInfo.webgpuDefaultAdapterJson;
+      if (defaultJson) {
+        Glean.webgpu.defaultAdapter.set(JSON.parse(defaultJson));
+      }
+      let fallbackJson = gfxInfo.webgpuFallbackAdapterJson;
+      if (fallbackJson) {
+        Glean.webgpu.fallbackAdapter.set(JSON.parse(fallbackJson));
+      }
+    } catch (e) {
+      this._log.error("_updateWebgpuAdapters caught error", e);
+    }
   },
 
   /**

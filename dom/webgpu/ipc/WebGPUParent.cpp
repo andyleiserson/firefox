@@ -7,9 +7,12 @@
 #include <unordered_set>
 
 #include "ExternalTexture.h"
+#include "GfxInfoBase.h"
+#include "mozilla/Components.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/dom/WebGPUBinding.h"
 #include "mozilla/gfx/FileHandleWrapper.h"
+#include "mozilla/gfx/GPUParent.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ImageDataSerializer.h"
@@ -19,6 +22,7 @@
 #include "mozilla/layers/WebRenderTextureHost.h"
 #include "mozilla/webgpu/SharedTexture.h"
 #include "mozilla/webgpu/ffi/wgpu.h"
+#include "nsIGfxInfo.h"
 
 #if defined(XP_WIN)
 #  include "mozilla/gfx/DeviceManagerDx.h"
@@ -319,6 +323,26 @@ extern void wgpu_parent_post_request_device(WGPUWebGPUParentPtr aParent,
                                             WGPUDeviceId aDeviceId) {
   auto* parent = static_cast<WebGPUParent*>(aParent);
   parent->PostAdapterRequestDevice(aDeviceId);
+}
+
+extern "C" void wgpu_parent_report_adapter(bool aIsFallback,
+                                           const nsCString* aJson) {
+  nsCString json(*aJson);
+  if (XRE_IsGPUProcess()) {
+    if (auto* gpu = gfx::GPUParent::GetSingleton()) {
+      gpu->ReportWebgpuAdapter(aIsFallback, std::move(json));
+    }
+  } else {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "gfxInfo::ReportWebgpuAdapter",
+        [isFallback = aIsFallback, json = std::move(json)]() mutable {
+          nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+          if (gfxInfo) {
+            static_cast<mozilla::widget::GfxInfoBase*>(gfxInfo.get())
+                ->ReportWebgpuAdapter(isFallback, std::move(json));
+          }
+        }));
+  }
 }
 
 extern ffi::WGPUBufferMapClosure wgpu_parent_build_buffer_map_closure(

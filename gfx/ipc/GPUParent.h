@@ -47,6 +47,7 @@ class GPUParent final : public PGPUParent {
   void NotifyDisableRemoteCanvas();
 
   void ReportGLStrings(GfxInfoGLStrings&& aStrings);
+  void ReportWebgpuAdapter(bool aIsFallbackAdapter, nsCString&& aAdapterJson);
 
   mozilla::ipc::IPCResult RecvInit(nsTArray<GfxVarUpdate>&& vars,
                                    const DevicePrefs& devicePrefs,

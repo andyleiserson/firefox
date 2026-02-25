@@ -282,6 +282,21 @@ void GPUParent::ReportGLStrings(GfxInfoGLStrings&& aStrings) {
   (void)SendReportGLStrings(std::move(aStrings));
 }
 
+void GPUParent::ReportWebgpuAdapter(bool aIsFallbackAdapter,
+                                    nsCString&& aAdapterJson) {
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(
+        NS_NewRunnableFunction("gfx::GPUParent::ReportWebgpuAdapter",
+                               [isFallback = aIsFallbackAdapter,
+                                json = std::move(aAdapterJson)]() mutable {
+                                 GPUParent::GetSingleton()->ReportWebgpuAdapter(
+                                     isFallback, std::move(json));
+                               }));
+    return;
+  }
+  (void)SendReportWebgpuAdapter(aIsFallbackAdapter, aAdapterJson);
+}
+
 mozilla::ipc::IPCResult GPUParent::RecvInit(
     nsTArray<GfxVarUpdate>&& vars, const DevicePrefs& devicePrefs,
     nsTArray<LayerTreeIdMapping>&& aMappings,

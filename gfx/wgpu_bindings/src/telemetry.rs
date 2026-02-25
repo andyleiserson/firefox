@@ -4,7 +4,19 @@
 
 // Strings should have a maximum of 111 characters and be comprised of printable ASCII characters.
 
-pub fn build_telemetry_struct() -> wgh::Telemetry {
+use std::num::NonZeroI64;
+
+use firefox_on_glean::metrics::webgpu::{
+    DefaultAdapterObjectItemInfoObject, DefaultAdapterObjectItemLimitsObject,
+};
+use nsstring::nsCString;
+use serde_json::json;
+
+extern "C" {
+    fn wgpu_parent_report_adapter(is_fallback: bool, json: &nsCString);
+}
+
+pub fn get_wgpu_hooks() -> wgh::Telemetry {
     wgh::Telemetry {
         #[cfg(target_os = "windows")]
         d3d12_expose_adapter,
@@ -81,4 +93,190 @@ fn d3d12_expose_adapter(
     firefox_on_glean::metrics::webgpu::expose_adapter
         .get(key, category)
         .add(1);
+}
+
+pub fn report_adapter(
+    features: wgt::FeaturesWebGPU,
+    info: &wgt::AdapterInfo,
+    limits: &wgt::Limits,
+) {
+    // READ ME: This explicit destructuring is your reminder to update
+    // the telemetry schema in `gfx/metrics.yaml`.
+    let &wgt::Limits {
+        max_bind_groups,
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=1967020
+        //max_bind_groups_plus_vertex_buffers,
+        max_immediate_size,
+        max_bindings_per_bind_group,
+        max_buffer_size,
+        max_color_attachment_bytes_per_sample,
+        max_color_attachments,
+        max_compute_invocations_per_workgroup,
+        max_compute_workgroup_size_x,
+        max_compute_workgroup_size_y,
+        max_compute_workgroup_size_z,
+        max_compute_workgroup_storage_size,
+        max_compute_workgroups_per_dimension,
+        max_dynamic_storage_buffers_per_pipeline_layout,
+        max_dynamic_uniform_buffers_per_pipeline_layout,
+        max_inter_stage_shader_variables,
+        // READ ME: This explicit destructuring is your reminder to update
+        // the telemetry schema in `gfx/metrics.yaml`.
+        max_sampled_textures_per_shader_stage,
+        max_samplers_per_shader_stage,
+        // `max_storage_{buffers,textures}_in_{vertex,fragment}_stage`:
+        // https://bugzilla.mozilla.org/show_bug.cgi?id=2006720
+        //max_storage_buffers_in_fragment_stage,
+        //max_storage_buffers_in_vertex_stage,
+        max_storage_buffers_per_shader_stage,
+        //max_storage_textures_in_fragment_stage,
+        //max_storage_textures_in_vertex_stage,
+        max_storage_textures_per_shader_stage,
+        max_storage_buffer_binding_size,
+        max_texture_array_layers,
+        max_texture_dimension_1d,
+        max_texture_dimension_2d,
+        max_texture_dimension_3d,
+        max_uniform_buffer_binding_size,
+        max_uniform_buffers_per_shader_stage,
+        max_vertex_attributes,
+        max_vertex_buffers,
+        max_vertex_buffer_array_stride,
+        min_storage_buffer_offset_alignment,
+        min_uniform_buffer_offset_alignment,
+
+        // READ ME: This explicit destructuring is your reminder to update
+        // the telemetry schema in `gfx/metrics.yaml`.
+
+        // Limits below this point relate to wgpu extensions that Firefox does not use.
+        max_non_sampler_bindings: _,
+        max_binding_array_elements_per_shader_stage: _,
+        max_binding_array_sampler_elements_per_shader_stage: _,
+        max_binding_array_acceleration_structure_elements_per_shader_stage: _,
+
+        max_task_mesh_workgroup_total_count: _,
+        max_task_mesh_workgroups_per_dimension: _,
+        max_task_invocations_per_workgroup: _,
+        max_task_invocations_per_dimension: _,
+        max_mesh_invocations_per_workgroup: _,
+        max_mesh_invocations_per_dimension: _,
+
+        max_task_payload_size: _,
+        max_mesh_output_vertices: _,
+        max_mesh_output_primitives: _,
+        max_mesh_output_layers: _,
+        max_mesh_multiview_view_count: _,
+
+        max_acceleration_structures_per_shader_stage: _,
+        max_blas_primitive_count: _,
+        max_blas_geometry_count: _,
+        max_tlas_instance_count: _,
+
+        max_multiview_view_count: _,
+    } = limits;
+
+    // READ ME: This explicit destructuring is your reminder to update
+    // the telemetry schema in `gfx/metrics.yaml`.
+    let &wgt::AdapterInfo {
+        subgroup_min_size,
+        subgroup_max_size,
+        name: ref device_name,
+        vendor: vendor_id,
+        device: device_id,
+        device_pci_bus_id: _,
+        device_type,
+        ref driver,
+        ref driver_info,
+        backend,
+        transient_saves_memory: _,
+        ref limit_bucket,
+    } = info;
+
+    let is_fallback = device_type == wgt::DeviceType::Cpu;
+
+    let limits = DefaultAdapterObjectItemLimitsObject {
+        maxBindGroups: Some(max_bind_groups.into()),
+        maxBindGroupsPlusVertexBuffers: None,
+        maxImmediateSize: Some(max_immediate_size.into()),
+        maxBindingsPerBindGroup: Some(max_bindings_per_bind_group.into()),
+        maxBufferSize: Some(max_buffer_size.try_into().unwrap_or(i64::MAX)),
+        maxColorAttachmentBytesPerSample: Some(max_color_attachment_bytes_per_sample.into()),
+        maxColorAttachments: Some(max_color_attachments.into()),
+        maxComputeInvocationsPerWorkgroup: Some(max_compute_invocations_per_workgroup.into()),
+        maxComputeWorkgroupSizeX: Some(max_compute_workgroup_size_x.into()),
+        maxComputeWorkgroupSizeY: Some(max_compute_workgroup_size_y.into()),
+        maxComputeWorkgroupSizeZ: Some(max_compute_workgroup_size_z.into()),
+        maxComputeWorkgroupStorageSize: Some(max_compute_workgroup_storage_size.into()),
+        maxComputeWorkgroupsPerDimension: Some(max_compute_workgroups_per_dimension.into()),
+        maxDynamicStorageBuffersPerPipelineLayout: Some(
+            max_dynamic_storage_buffers_per_pipeline_layout.into(),
+        ),
+        maxDynamicUniformBuffersPerPipelineLayout: Some(
+            max_dynamic_uniform_buffers_per_pipeline_layout.into(),
+        ),
+        maxInterStageShaderVariables: Some(max_inter_stage_shader_variables.into()),
+        maxSampledTexturesPerShaderStage: Some(max_sampled_textures_per_shader_stage.into()),
+        maxSamplersPerShaderStage: Some(max_samplers_per_shader_stage.into()),
+        maxStorageBuffersInFragmentStage: None,
+        maxStorageBuffersInVertexStage: None,
+        maxStorageBuffersPerShaderStage: Some(max_storage_buffers_per_shader_stage.into()),
+        maxStorageTexturesInFragmentStage: None,
+        maxStorageTexturesInVertexStage: None,
+        maxStorageTexturesPerShaderStage: Some(max_storage_textures_per_shader_stage.into()),
+        maxStorageBufferBindingSize: Some(
+            max_storage_buffer_binding_size
+                .try_into()
+                .unwrap_or(i64::MAX),
+        ),
+        maxTextureArrayLayers: Some(max_texture_array_layers.into()),
+        maxTextureDimension1D: Some(max_texture_dimension_1d.into()),
+        maxTextureDimension2D: Some(max_texture_dimension_2d.into()),
+        maxTextureDimension3D: Some(max_texture_dimension_3d.into()),
+        maxUniformBufferBindingSize: Some(
+            max_uniform_buffer_binding_size
+                .try_into()
+                .unwrap_or(i64::MAX),
+        ),
+        maxUniformBuffersPerShaderStage: Some(max_uniform_buffers_per_shader_stage.into()),
+        maxVertexAttributes: Some(max_vertex_attributes.into()),
+        maxVertexBuffers: Some(max_vertex_buffers.into()),
+        maxVertexBufferArrayStride: Some(max_vertex_buffer_array_stride.into()),
+        minStorageBufferOffsetAlignment: Some(min_storage_buffer_offset_alignment.into()),
+        minUniformBufferOffsetAlignment: Some(min_uniform_buffer_offset_alignment.into()),
+    };
+
+    let info = DefaultAdapterObjectItemInfoObject {
+        subgroupMinSize: Some(subgroup_min_size.into()),
+        subgroupMaxSize: Some(subgroup_max_size.into()),
+        deviceName: (!device_name.is_empty()).then(|| device_name.clone()),
+        vendorId: NonZeroI64::new(vendor_id.into()).map(|v| v.get()),
+        deviceId: NonZeroI64::new(device_id.into()).map(|v| v.get()),
+        driverName: (!driver.is_empty()).then(|| driver.clone()),
+        driverInfo: (!driver_info.is_empty()).then(|| driver_info.clone()),
+        backend: Some(backend.to_str().into()),
+        limitBucket: limit_bucket.as_ref().map(|b| b.name.to_string()),
+    };
+
+    let mut feature_strs =
+        Vec::with_capacity(usize::try_from(features.bits().count_ones() as u64).unwrap());
+    for f in features.iter() {
+        match wgt::Features::as_str(&f.into()) {
+            Some(name) => feature_strs.push(name),
+            None => {
+                log::warn!("Unknown WebGPU feature bit: {f:?}");
+            }
+        }
+    }
+
+    let json = json!({
+        "limits": limits,
+        "info": info,
+        "features": feature_strs,
+    })
+    .to_string();
+
+    let json_ns = nsCString::from(&json);
+    unsafe {
+        wgpu_parent_report_adapter(is_fallback, &json_ns);
+    }
 }

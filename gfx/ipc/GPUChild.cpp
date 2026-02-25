@@ -417,6 +417,16 @@ mozilla::ipc::IPCResult GPUChild::RecvReportGLStrings(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult GPUChild::RecvReportWebgpuAdapter(
+    const bool& aIsFallbackAdapter, nsCString&& aAdapterJson) {
+  nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+  if (gfxInfo) {
+    static_cast<widget::GfxInfoBase*>(gfxInfo.get())
+        ->ReportWebgpuAdapter(aIsFallbackAdapter, std::move(aAdapterJson));
+  }
+  return IPC_OK();
+}
+
 class DeferredDeleteGPUChild : public Runnable {
  public:
   explicit DeferredDeleteGPUChild(RefPtr<GPUChild>&& aChild)

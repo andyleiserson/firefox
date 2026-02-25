@@ -1882,6 +1882,9 @@ webgpu:
       The number of times wgpu-hal tried to expose an adapter.
       Note that a call to `requestAdapter` might result in multiple
       calls to expose adapter.
+    metadata:
+      tags:
+        - 'Core :: Graphics: WebGPU'
     dual_labels:
       key:
         description: >
@@ -1901,3 +1904,139 @@ webgpu:
     notification_emails:
       - gfx-telemetry-alerts@mozilla.com
     expires: never
+  default_adapter: &webgpu_adapter
+    type: object
+    lifetime: application
+    description: |
+      Information about default (non-fallback) WebGPU adapter. This is only
+      reported if content actually calls `navigator.gpu.requestAdapter`
+      without `forceFallbackAdapter`.
+
+      For the feature state of WebGPU (enabled or disabled and why), see
+      `gfx.features.webgpu`.
+    metadata:
+      tags:
+        - 'Core :: Graphics: WebGPU'
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2020771
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=2020771
+    data_sensitivity:
+      - technical
+    structure:
+      type: object
+      properties:
+        limits:
+          type: object
+          properties:
+            maxBindGroups:
+              type: number
+            maxBindGroupsPlusVertexBuffers:
+              type: number
+            maxImmediateSize:
+              type: number
+            maxBindingsPerBindGroup:
+              type: number
+            maxBufferSize:
+              type: number
+            maxColorAttachmentBytesPerSample:
+              type: number
+            maxColorAttachments:
+              type: number
+            maxComputeInvocationsPerWorkgroup:
+              type: number
+            maxComputeWorkgroupSizeX:
+              type: number
+            maxComputeWorkgroupSizeY:
+              type: number
+            maxComputeWorkgroupSizeZ:
+              type: number
+            maxComputeWorkgroupStorageSize:
+              type: number
+            maxComputeWorkgroupsPerDimension:
+              type: number
+            maxDynamicStorageBuffersPerPipelineLayout:
+              type: number
+            maxDynamicUniformBuffersPerPipelineLayout:
+              type: number
+            maxInterStageShaderVariables:
+              type: number
+            maxSampledTexturesPerShaderStage:
+              type: number
+            maxSamplersPerShaderStage:
+              type: number
+            maxStorageBufferBindingSize:
+              type: number
+            maxStorageBuffersInFragmentStage:
+              type: number
+            maxStorageBuffersInVertexStage:
+              type: number
+            maxStorageBuffersPerShaderStage:
+              type: number
+            maxStorageTexturesInFragmentStage:
+              type: number
+            maxStorageTexturesInVertexStage:
+              type: number
+            maxStorageTexturesPerShaderStage:
+              type: number
+            maxTextureArrayLayers:
+              type: number
+            maxTextureDimension1D:
+              type: number
+            maxTextureDimension2D:
+              type: number
+            maxTextureDimension3D:
+              type: number
+            maxUniformBufferBindingSize:
+              type: number
+            maxUniformBuffersPerShaderStage:
+              type: number
+            maxVertexAttributes:
+              type: number
+            maxVertexBufferArrayStride:
+              type: number
+            maxVertexBuffers:
+              type: number
+            minStorageBufferOffsetAlignment:
+              type: number
+            minUniformBufferOffsetAlignment:
+              type: number
+        info:
+          type: object
+          properties:
+            subgroupMinSize:
+              type: number
+            subgroupMaxSize:
+              type: number
+            deviceName:
+              type: string
+            vendorId:
+              type: number
+            deviceId:
+              type: number
+            driverName:
+              type: string
+            driverInfo:
+              type: string
+            backend:
+              type: string
+            limitBucket:
+              type: string
+        features:
+          type: array
+          items:
+            type: string
+    notification_emails:
+      - gfx-telemetry-alerts@mozilla.com
+    expires: never
+
+  fallback_adapter:
+    <<: *webgpu_adapter
+    description: |
+      Information about the fallback WebGPU adapter. This is only reported if
+      a fallback adapter is returned from `navigator.gpu.requestAdapter` (which
+      should always be the case if it is called with `forceFallbackAdapter`,
+      but may also be the case if called without the flag)
+
+      For the feature state of WebGPU (enabled or disabled and why), see
+      `gfx.features.webgpu`.

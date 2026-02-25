@@ -171,6 +171,22 @@ gfx.features:
                   optionally including ":" followed by a reason
                   e.g. "FEATURE_FAILURE_WEBRENDER_VIDEO_CRASH_INTEL_23.20.16.4973".
 
+  webgpu:
+    <<: *basic_gfx_feature
+    description: |
+      Information about WebGPU feature state.
+      * status - One of
+        * "unused"      - This feature has not been requested.
+        * "unavailable" - Safe Mode or OS restriction prevents use.
+        * "blocked"     - An internal condition (such as safe mode) prevents use.
+        * "blocklisted" - Blocked due to a blocklist restriction.
+        * "denied"      - Blocked due to allowlist restrictions.
+        * "disabled"    - User explicitly disabled this default feature.
+        * "failed"      - Feature failed to initialize.
+        * "available"   - User has this feature available by default and it's in use.
+                  optionally including ":" followed by a reason
+                  e.g. "FEATURE_FAILURE_WEBRENDER_VIDEO_CRASH_INTEL_23.20.16.4973".
+
   webrender:
     <<: *basic_gfx_feature
     description: |

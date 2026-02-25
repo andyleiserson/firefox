@@ -1593,6 +1593,9 @@ void GfxInfoBase::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj) {
       gfxConfig::GetFeature(gfx::Feature::GPU_PROCESS);
   InitFeatureObject(aCx, aObj, "gpuProcess", gpuProcess, &obj);
 
+  gfx::FeatureState& webgpu = gfxConfig::GetFeature(gfx::Feature::WEBGPU);
+  InitFeatureObject(aCx, aObj, "webgpu", webgpu, &obj);
+
   gfx::FeatureState& webrender = gfxConfig::GetFeature(gfx::Feature::WEBRENDER);
   InitFeatureObject(aCx, aObj, "webrender", webrender, &obj);
 
@@ -1674,6 +1677,30 @@ GfxInfoBase::GetCodecSupportInfo(nsACString& aCodecSupportInfo) {
 NS_IMETHODIMP_(void)
 GfxInfoBase::SetCodecSupportInfo(const nsACString& aCodecSupportInfo) {
   mCodecSupportInfo.Assign(aCodecSupportInfo);
+}
+
+void GfxInfoBase::ReportWebgpuAdapter(bool aIsFallback, nsCString&& aJson) {
+  if (aIsFallback) {
+    mWebgpuFallbackAdapterJson = std::move(aJson);
+  } else {
+    mWebgpuDefaultAdapterJson = std::move(aJson);
+  }
+  nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+  if (obs) {
+    obs->NotifyObservers(nullptr, "webgpu-adapter-ready", nullptr);
+  }
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetWebgpuDefaultAdapterJson(nsACString& aResult) {
+  aResult = mWebgpuDefaultAdapterJson;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetWebgpuFallbackAdapterJson(nsACString& aResult) {
+  aResult = mWebgpuFallbackAdapterJson;
+  return NS_OK;
 }
 
 NS_IMETHODIMP

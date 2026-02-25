@@ -186,6 +186,10 @@ child:
   // Reports GL string values obtained from an OpenGL context to gfxInfo in the
   // parent process.
   async ReportGLStrings(GfxInfoGLStrings aStrings);
+
+  // Reports WebGPU adapter information as JSON to gfxInfo in the parent
+  // process, for consumption by TelemetryEnvironment.
+  async ReportWebgpuAdapter(bool isFallbackAdapter, nsCString adapterJson);
 };
 
 } // namespace gfx

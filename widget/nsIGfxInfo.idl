@@ -37,6 +37,9 @@ interface nsIGfxInfo : nsISupports
   readonly attribute unsigned long TargetFrameRate;
   readonly attribute ACString CodecSupportInfo;
 
+  readonly attribute ACString webgpuDefaultAdapterJson;
+  readonly attribute ACString webgpuFallbackAdapterJson;
+
   // XXX: Switch to a list of devices, rather than explicitly numbering them.
 
   // Present on all platforms, but only useful on Android

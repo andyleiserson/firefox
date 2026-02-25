@@ -245,6 +245,14 @@ class MockGfxInfo final : public nsIGfxInfo {
   NS_IMETHOD GetDrmRenderDevice(nsACString& aDrmRenderDevice) override {
     return NS_ERROR_NOT_IMPLEMENTED;
   }
+  NS_IMETHOD GetWebgpuDefaultAdapterJson(
+      nsACString& aWebgpuDefaultAdapterJson) override {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  NS_IMETHOD GetWebgpuFallbackAdapterJson(
+      nsACString& aWebgpuFallbackAdapterJson) override {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
   NS_IMETHOD ControlGPUProcessForXPCShell(bool aEnable,
                                           bool* _retval) override {
     return NS_ERROR_NOT_IMPLEMENTED;
