@@ -332,7 +332,9 @@ webgl2-version = WebGL 2 Driver Version
 webgl2-driver-extensions = WebGL 2 Driver Extensions
 webgl2-extensions = WebGL 2 Extensions
 webgpu-default-adapter = WebGPU Default Adapter
+webgpu-default-adapter-raw-limits = WebGPU Default Adapter (Raw Limits)
 webgpu-fallback-adapter = WebGPU Fallback Adapter
+webgpu-fallback-adapter-raw-limits = WebGPU Fallback Adapter (Raw Limits)
 
 # Variables
 #   $bugNumber (string) - Bug number on Bugzilla

@@ -842,9 +842,19 @@ var dataProviders = {
 
     // Webgpu info is going to need awaits.
     (async () => {
-      data.webgpuDefaultAdapter = await GetWebgpuInfo({});
+      data.webgpuDefaultAdapter = await GetWebgpuInfo({
+        applyLimitBuckets: true,
+      });
+      data.webgpuDefaultAdapterRawLimits = await GetWebgpuInfo({
+        applyLimitBuckets: false,
+      });
       data.webgpuFallbackAdapter = await GetWebgpuInfo({
         forceFallbackAdapter: true,
+        applyLimitBuckets: true,
+      });
+      data.webgpuFallbackAdapterRawLimits = await GetWebgpuInfo({
+        forceFallbackAdapter: true,
+        applyLimitBuckets: false,
       });
 
       done(data);

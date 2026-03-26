@@ -73,6 +73,7 @@ class AdapterInfo final : public nsWrapperCache, public ChildOf<Adapter> {
   void GetWgpuDriver(nsString&) const;
   void GetWgpuDriverInfo(nsString&) const;
   void GetWgpuBackend(nsString&) const;
+  void GetWgpuLimitBucket(nsString&) const;
 };
 
 inline auto ToHexCString(const uint64_t v) {

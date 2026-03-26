@@ -35,13 +35,14 @@ uint32_t AdapterInfo::SubgroupMinSize() const {
   // > different devices, but are still usable (e.g. use the default value of
   // > 4 for all devices).
 
-  if (GetParentObject()->ShouldResistFingerprinting(
-          RFPTarget::WebGPUSubgroupSizes)) {
+  if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
     return 4;
   }
 
   // TODO: When we support `subgroups`, use the supported amount instead:
   // <https://bugzilla.mozilla.org/show_bug.cgi?id=1955417>
+  //
+  // If RFPTarget::WebGPULimitBuckets, values were adjusted by wgpu.
   return 4;
 }
 
@@ -58,23 +59,27 @@ uint32_t AdapterInfo::SubgroupMaxSize() const {
   // > different devices, but are still usable (e.g. use the default value of
   // > 128 for all devices).
 
-  if (GetParentObject()->ShouldResistFingerprinting(
-          RFPTarget::WebGPUSubgroupSizes)) {
+  if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
     return 128;
   }
 
   // TODO: When we support `subgroups`, use the supported amount instead:
   // <https://bugzilla.mozilla.org/show_bug.cgi?id=1955417>
+  //
+  // If RFPTarget::WebGPULimitBuckets, values were adjusted by wgpu.
   return 128;
 }
 
 bool AdapterInfo::IsFallbackAdapter() const {
-  if (GetParentObject()->ShouldResistFingerprinting(
-          RFPTarget::WebGPUIsFallbackAdapter)) {
+  if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
     // Always report hardware support for WebGPU.
     // This behaviour matches with media capabilities API.
     return false;
   }
+
+  // Otherwise, use the value reported by `wgpu`. Note that bucketing does not
+  // change `isFallbackAdapter`, but `isFallbackAdapter` does change which
+  // limit and feature buckets may have been applied.
 
   return mAboutSupportInfo->device_type ==
          ffi::WGPUDeviceType::WGPUDeviceType_Cpu;
@@ -142,6 +147,10 @@ void AdapterInfo::GetWgpuBackend(nsString& s) const {
       break;
   }
   MOZ_CRASH("Bad `ffi::WGPUBackend`");
+}
+
+void AdapterInfo::GetWgpuLimitBucket(nsString& s) const {
+  s = mAboutSupportInfo->limit_bucket;
 }
 
 // -
@@ -289,32 +298,6 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
     return ret;
   }();
 
-  auto remainingFeatureBits = aInfo->features;
-  auto bitMask = decltype(remainingFeatureBits){0};
-  while (remainingFeatureBits) {
-    if (bitMask) {
-      bitMask <<= 1;
-    } else {
-      bitMask = 1;
-    }
-    const auto bit = remainingFeatureBits & bitMask;
-    remainingFeatureBits &= ~bitMask;  // Clear bit.
-    if (!bit) {
-      continue;
-    }
-
-    const auto featureForBit = FEATURE_BY_BIT.find(bit);
-    if (featureForBit != FEATURE_BY_BIT.end()) {
-      mFeatures->Add(featureForBit->second, ignoredRv);
-    } else {
-      // One of two cases:
-      //
-      // 1. WGPU claims to implement this, but we've explicitly marked this as
-      // not implemented.
-      // 2. We don't recognize that bit, but maybe it's a wpgu-native-only
-      // feature.
-    }
-  }
   // TODO: Once we implement compat mode (see
   // <https://bugzilla.mozilla.org/show_bug.cgi?id=1905951>), do not report this
   // unconditionally.
@@ -328,9 +311,50 @@ Adapter::Adapter(Instance* const aParent, WebGPUChild* const aChild,
   // > devices created from such adapters.
   mFeatures->Add(dom::GPUFeatureName::Core_features_and_limits, ignoredRv);
 
-  // We clamp limits to defaults when requestDevice is called, but
-  // we return the actual limits when only requestAdapter is called.
-  // So, we should clamp the limits here too if we should RFP.
+  ffi::WGPUFeaturesWebGPU remainingFeatureBits;
+  if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
+    // If `RFPTarget::WebGPULimits`, we force ALL WebGPU values (limits,
+    // subgroups, fallback adapter, features) to defaults.
+    remainingFeatureBits = 0;
+  } else {
+    // If `RFPTarget::WebGPULimitBuckets`, features were masked by wgpu.
+    // Otherwise, wgpu returned actual device features.
+    remainingFeatureBits = aInfo->features;
+  }
+
+  if (remainingFeatureBits != ffi::WGPUFeaturesWebGPU(0)) {
+    auto bitMask = ffi::WGPUFeaturesWebGPU(0);
+    while (remainingFeatureBits) {
+      if (bitMask) {
+        bitMask <<= 1;
+      } else {
+        bitMask = 1;
+      }
+      const auto bit = remainingFeatureBits & bitMask;
+      remainingFeatureBits &= ~bitMask;  // Clear bit.
+      if (!bit) {
+        continue;
+      }
+
+      const auto featureForBit = FEATURE_BY_BIT.find(bit);
+      if (featureForBit != FEATURE_BY_BIT.end()) {
+        mFeatures->Add(featureForBit->second, ignoredRv);
+      } else {
+        // One of two cases:
+        //
+        // 1. WGPU claims to implement this, but we've explicitly marked this as
+        // not implemented.
+        // 2. We don't recognize that bit, but maybe it's a wpgu-native-only
+        // feature.
+      }
+    }
+  }
+
+  // If `RFPTarget::WebGPULimits`, we force ALL WebGPU values (limits,
+  // subgroups, fallback adapter, features) to defaults.
+  //
+  // Otherwise, we use the values returned by `wgpu`, which were coerced to a
+  // bucket if `RFPTarget::WebGPULimitBuckets`.
   if (GetParentObject()->ShouldResistFingerprinting(RFPTarget::WebGPULimits)) {
     ffi::wgpu_client_fill_default_limits(mLimits->mFfi.get());
   }

@@ -7,7 +7,9 @@ with Files("**"):
 
 MOCHITEST_MANIFESTS += [
     "tests/mochitest/mochitest-no-pref.toml",
-    "tests/mochitest/mochitest-resistfingerprinting.toml",
+    "tests/mochitest/mochitest-rfp-limits-bucketed.toml",
+    "tests/mochitest/mochitest-rfp-limits-fixed.toml",
+    "tests/mochitest/mochitest-rfp-off.toml",
     "tests/mochitest/mochitest.toml",
     "tests/mochitest/perftest.toml",
 ]

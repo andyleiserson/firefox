@@ -5,12 +5,16 @@ run-if = [
   "os == 'mac' && arch == 'aarch64'",
   "os == 'win'",
 ]
+support-files = ["limits.js"]
 prefs = [
+  # General prefs for WebGPU tests
   "dom.webgpu.enabled=true",
   "dom.webgpu.service-workers.enabled=true",
-  # Ignoring the blocklist is necessary to run tests in CI on old Mesa versions
+
+  # Ignoring the blocklist is not necessary for this test, because it uses the noop backend.
   # (https://bugzilla.mozilla.org/show_bug.cgi?id=1985348).
-  "gfx.webgpu.ignore-blocklist=true",
+
+  "dom.webgpu.wgpu-backend=noop",
   "privacy.fingerprintingProtection=true",
   "privacy.fingerprintingProtection.overrides='-AllTargets,+WebGPULimits'",
 ]
@@ -20,4 +24,4 @@ prefs = [
 # See spec WebIDL, like this: https://www.w3.org/TR/webgpu/#navigatorgpu
 scheme = "https"
 
-["test_rfp_clamp_limits_on.html"]
+["test_rfp_limits_fixed.html"]

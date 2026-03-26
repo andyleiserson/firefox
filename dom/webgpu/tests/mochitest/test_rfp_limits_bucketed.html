@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="/tests/SimpleTest/SimpleTest.js"></script>
+    <script src="limits.js"></script>
+    <link rel="stylesheet" href="/tests/SimpleTest/test.css" />
+  </head>
+  <body>
+    <script>
+      ok(
+        SpecialPowers.getBoolPref("dom.webgpu.enabled"),
+        "Pref should be enabled."
+      );
+
+      const func = async function () {
+        const adapter = await navigator.gpu.requestAdapter();
+        ok(adapter, "Got adapter");
+
+	// With RFP in "bucketed limits" mode, we should see that the
+	// "unlimited" limit values that the noop backend uses by default have
+	// been replaced with values from one of the limit buckets. We check
+	// this by verifying the limits match neither the WebGPU defaults, nor
+	// the "unlimited" values.
+
+        const limitKeys = Object.keys(adapter.limits.__proto__).filter(
+          key => key !== "constructor"
+        );
+
+        let matchesUnlimited = true;
+        let matchesDefaults = true;
+
+        for (const key of limitKeys) {
+          const value = adapter.limits[key];
+          const defaultValue = WEBGPU_DEFAULT_LIMITS[key];
+
+          // Check if this limit differs from the noop backend default
+          // ("unlimited") limits
+          if (key.startsWith("min")) {
+            if (value !== 1) {
+              matchesUnlimited = false;
+            }
+          } else if (value !== NOOP_UNLIMITED) {
+            matchesUnlimited = false;
+          }
+
+          // Check if this limit differs from the WebGPU defaults
+          if (defaultValue !== undefined && value !== defaultValue) {
+            matchesDefaults = false;
+          }
+        }
+
+        ok(!matchesUnlimited, "Limits should not match unlimited values");
+        ok(!matchesDefaults, "Limits should not match WebGPU default values");
+
+        const info = adapter.info;
+        is(info.subgroupMinSize, 4);
+        is(info.subgroupMaxSize, 128);
+        is(info.isFallbackAdapter, true); // noop backend reports DeviceType::Other
+
+        ok(adapter.features.size > 0, "features should not be empty");
+      };
+
+      SimpleTest.waitForExplicitFinish();
+      func()
+        .catch(e => ok(false, "Unhandled exception " + e))
+        .finally(() => SimpleTest.finish());
+    </script>
+  </body>
+</html>

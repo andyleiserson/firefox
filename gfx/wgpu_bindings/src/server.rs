@@ -161,7 +161,10 @@ pub extern "C" fn wgpu_server_new(owner: WebGPUParentPtr) -> *mut Global {
                     shader_compiler: dx12_shader_compiler,
                     ..Default::default()
                 },
-                noop: wgt::NoopBackendOptions::default(),
+                noop: wgt::NoopBackendOptions {
+                    enable: backends.contains(wgt::Backends::NOOP),
+                    ..Default::default()
+                },
             },
             memory_budget_thresholds: wgt::MemoryBudgetThresholds {
                 for_resource_creation: Some(95),
@@ -2644,6 +2647,7 @@ unsafe fn process_message(
             adapter_id,
             power_preference,
             force_fallback_adapter,
+            apply_limit_buckets,
         } => {
             #[allow(unused_mut)]
             let mut result = None;
@@ -2654,31 +2658,40 @@ unsafe fn process_message(
             #[cfg(target_os = "windows")]
             {
                 let mut adapter_luid = crate::FfiLUID { low_part: 0, high_part: 0 };
-                if wgpu_parent_get_compositor_device_luid(&mut adapter_luid) && !force_fallback_adapter {
-                    if let Some(instance) = global.global.instance_as_hal::<wgc::api::Dx12>() {
-                        for adapter in instance.enumerate_adapters(None) {
-                            let raw_adapter = adapter.adapter.raw_adapter();
-                            let desc = unsafe { raw_adapter.GetDesc() };
-                            if let Ok(desc) = desc {
-                                if desc.AdapterLuid.LowPart == adapter_luid.low_part
-                                    && desc.AdapterLuid.HighPart == adapter_luid.high_part
-                                {
-                                    global.create_adapter_from_hal(
-                                        wgh::DynExposedAdapter::from(adapter),
-                                        Some(adapter_id),
-                                    );
-                                    result = Some(true);
-                                    break;
-                                }
-                            }
-                        }
-                        if result.is_none() {
+                match global.global.instance_as_hal::<wgc::api::Dx12>() {
+                    Some(instance) if wgpu_parent_get_compositor_device_luid(&mut adapter_luid)
+                        && !force_fallback_adapter
+                    => {
+                        let adapter = instance
+                            .enumerate_adapters(None)
+                            .into_iter()
+                            .filter(|adapter| {
+                                let raw_adapter = adapter.adapter.raw_adapter();
+                                let desc = unsafe { raw_adapter.GetDesc() };
+                                desc.ok().is_some_and(|desc| {
+                                    desc.AdapterLuid.LowPart == adapter_luid.low_part
+                                        && desc.AdapterLuid.HighPart == adapter_luid.high_part
+                                })
+                            })
+                            .find_map(|adapter| wgc::limits::apply_limit_buckets(
+                                wgh::DynExposedAdapter::from(adapter)
+                            ));
+
+                        if let Some(adapter) = adapter {
+                            global.create_adapter_from_hal(adapter, Some(adapter_id));
+                            result = Some(true);
+                        } else {
                             log::error!(concat!(
                                 "Failed to find D3D12 adapter with the same LUID ",
                                 "that the compositor is using!"
                             ));
                             result = Some(false);
                         }
+                    }
+                    _ => {
+                        // No dx12 backend or couldn't get compositor device LUID or
+                        // force_fallback_adapter is set. `result` remains `None`, and
+                        // we'll request an adapter the regular way.
                     }
                 }
             }
@@ -2687,10 +2700,10 @@ unsafe fn process_message(
                 power_preference,
                 force_fallback_adapter,
                 compatible_surface: None,
-                apply_limit_buckets: false,
+                apply_limit_buckets,
             };
             let result = result.unwrap_or_else(|| {
-                match global.request_adapter(&desc, wgt::Backends::PRIMARY, Some(adapter_id)) {
+                match global.request_adapter(&desc, wgt::Backends::all(), Some(adapter_id)) {
                     Ok(_) => true,
                     Err(e) => {
                         log::warn!("{e}");
@@ -2718,7 +2731,7 @@ unsafe fn process_message(
                     device_pci_bus_id: _,
                     subgroup_min_size,
                     subgroup_max_size,
-                    limit_bucket: _,
+                    limit_bucket,
                 } = info;
 
                 let is_hardware = match device_type {
@@ -2759,6 +2772,7 @@ unsafe fn process_message(
                     transient_saves_memory,
                     subgroup_min_size,
                     subgroup_max_size,
+                    limit_bucket: limit_bucket.map(|t| t.name).unwrap_or_default(),
                 };
                 Some(info)
             } else {

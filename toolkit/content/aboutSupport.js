@@ -545,12 +545,18 @@ var snapshotFormatters = {
     //
     // @key      Text in the key column. Localized automatically, unless starts with "#".
     // @value    Fluent ID for text in the value column, or array of children.
-    function buildRow(key, value) {
+    function buildRow(key, value, style) {
+      if (!style) {
+        style = { "white-space": "pre-wrap" };
+      }
       let title = key[0] == "#" ? key.substr(1) : key;
       let keyStrId = toFluentID(key);
       let valueStrId = Array.isArray(value) ? null : toFluentID(value);
       let td = $.new("td", value);
-      td.style["white-space"] = "pre-wrap";
+      td.style = style;
+      Object.entries(style).map(([name, value]) => {
+        td.style[name] = value;
+      });
       if (valueStrId) {
         document.l10n.setAttributes(td, valueStrId);
       }
@@ -571,8 +577,8 @@ var snapshotFormatters = {
     // Build and append a row.
     //
     // @where    The name in "graphics-<name>-tbody", of the element to append to.
-    function addRow(where, key, value) {
-      addRows(where, [buildRow(key, value)]);
+    function addRow(where, key, value, style) {
+      addRows(where, [buildRow(key, value, style)]);
     }
     if ("info" in data) {
       apzInfo = formatApzInfo(data.info);
@@ -766,12 +772,19 @@ var snapshotFormatters = {
       await addRowFromKey("features", feature);
     }
 
-    featureKeys = ["webgpuDefaultAdapter", "webgpuFallbackAdapter"];
+    featureKeys = [
+      "webgpuDefaultAdapter",
+      "webgpuDefaultAdapterRawLimits",
+      "webgpuFallbackAdapter",
+      "webgpuFallbackAdapterRawLimits",
+    ];
     for (let feature of featureKeys) {
       const obj = data[feature];
       if (obj) {
-        const str = JSON.stringify(obj, null, "  ");
-        await addRow("features", feature, [new Text(str)]);
+        const str = JSON.stringify(obj);
+        await addRow("features", feature, [new Text(str)], {
+          "word-break": "break-all",
+        });
         delete data[feature];
       }
     }

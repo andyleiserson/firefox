@@ -693,6 +693,7 @@ pub extern "C" fn wgpu_client_receive_server_message(client: &Client, byte_buf: 
                 transient_saves_memory,
                 subgroup_min_size,
                 subgroup_max_size,
+                limit_bucket,
             }) = adapter_information
             {
                 let nss = |s: &str| {
@@ -715,6 +716,7 @@ pub extern "C" fn wgpu_client_receive_server_message(client: &Client, byte_buf: 
                     transient_saves_memory,
                     subgroup_min_size,
                     subgroup_max_size,
+                    limit_bucket: nss(&limit_bucket),
                 };
                 unsafe {
                     wgpu_child_resolve_request_adapter_promise(
@@ -882,12 +884,14 @@ pub extern "C" fn wgpu_client_request_adapter(
     client: &Client,
     power_preference: wgt::PowerPreference,
     force_fallback_adapter: bool,
+    apply_limit_buckets: bool,
 ) -> id::AdapterId {
     let adapter_id = client.identities.lock().adapters.process();
     let message = Message::RequestAdapter {
         adapter_id,
         power_preference,
         force_fallback_adapter,
+        apply_limit_buckets,
     };
     client.queue_message(&message);
     adapter_id

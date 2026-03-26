@@ -22,6 +22,7 @@
 #include "mozilla/webgpu/ffi/wgpu.h"
 #include "nsDebug.h"
 #include "nsIGlobalObject.h"
+#include "nsRFPService.h"
 #include "nsString.h"
 #include "nsStringFwd.h"
 
@@ -218,8 +219,18 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
     power_preference = ffi::WGPUPowerPreference_None;
   }
 
+  // When `RFPTarget::WebGPULimits` is active, all limit values should be
+  // overridden with defaults and bucketing shouldn't matter, but to be
+  // conservative, request it anyways.
+  bool applyLimitBuckets =
+      aOptions.mApplyLimitBuckets.WasPassed()
+          ? aOptions.mApplyLimitBuckets.Value()
+          : (mOwner->ShouldResistFingerprinting(RFPTarget::WebGPULimits) ||
+             mOwner->ShouldResistFingerprinting(RFPTarget::WebGPULimitBuckets));
+
   RawId adapter_id = ffi::wgpu_client_request_adapter(
-      child->GetClient(), power_preference, aOptions.mForceFallbackAdapter);
+      child->GetClient(), power_preference, aOptions.mForceFallbackAdapter,
+      applyLimitBuckets);
 
   child->EnqueueRequestAdapterPromise(
       PendingRequestAdapterPromise{promise, this, adapter_id});

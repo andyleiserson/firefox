@@ -130,6 +130,7 @@ pub struct AdapterInformation<S> {
     transient_saves_memory: bool,
     subgroup_min_size: u32,
     subgroup_max_size: u32,
+    limit_bucket: S,
 }
 
 #[repr(C)]
@@ -239,6 +240,7 @@ enum Message<'a> {
         adapter_id: id::AdapterId,
         power_preference: wgt::PowerPreference,
         force_fallback_adapter: bool,
+        apply_limit_buckets: bool,
     },
     RequestDevice {
         adapter_id: id::AdapterId,

@@ -97,8 +97,8 @@ ITEM_VALUE(SiteSpecificZoom,            61)
 ITEM_VALUE(FontVisibilityRestrictGenerics, 62)
 ITEM_VALUE(WebVTT,                      63)
 ITEM_VALUE(WebGPULimits,                64)
-ITEM_VALUE(WebGPUIsFallbackAdapter,     65)
-ITEM_VALUE(WebGPUSubgroupSizes,         66)
+ITEM_VALUE(WebGPULimitBuckets,          65)
+// 66 formerly WebGPUSubgroupSizes
 ITEM_VALUE(JSLocalePrompt,              67)
 ITEM_VALUE(ScreenAvailToResolution,     68)
 ITEM_VALUE(UseHardcodedFontSubstitutes, 69)
@@ -114,7 +114,7 @@ ITEM_VALUE(WebGLVendorConstant,         78)
 ITEM_VALUE(WebGLVendorRandomize,        79)
 ITEM_VALUE(WebGLRendererConstant,       80)
 
-// !!! Adding a new target? Rename PointerId and repurpose it.
+// !!! Adding a new target? Bit 66 (formerly WebGPUSubgroupSizes) is available.
 
 /*
  * In certain cases, we precompute the value of ShouldRFP for e.g. a Document.

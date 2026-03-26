@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="/tests/SimpleTest/SimpleTest.js"></script>
+    <script src="limits.js"></script>
+    <link rel="stylesheet" href="/tests/SimpleTest/test.css" />
+  </head>
+  <body>
+    <script>
+      ok(
+        SpecialPowers.getBoolPref("dom.webgpu.enabled"),
+        "Pref should be enabled."
+      );
+
+      const func = async function () {
+        const adapter = await navigator.gpu.requestAdapter();
+        ok(adapter, "Got adapter");
+
+        // With RFP in "fixed limits" mode, we should see exactly the WebGPU
+        // default limits. We check them all, and fail if there are any
+        // keys we don't expect.
+
+        const limitKeys = Object.keys(adapter.limits.__proto__).filter(
+          key => key !== "constructor"
+        );
+
+        for (const key of Object.keys(WEBGPU_DEFAULT_LIMITS)) {
+          is(
+            adapter.limits[key],
+            WEBGPU_DEFAULT_LIMITS[key],
+            `Limit ${key} should match WebGPU default`
+          );
+        }
+
+        // Check for added limits we don't know about
+        for (const key of limitKeys) {
+          ok(
+            key in WEBGPU_DEFAULT_LIMITS,
+            `Found unexpected limit ${key}`
+          );
+        }
+
+        const info = adapter.info;
+        is(info.subgroupMinSize, 4);
+        is(info.subgroupMaxSize, 128);
+        is(info.isFallbackAdapter, false);
+
+        // Check for added adapterInfo fields we don't know about
+        const infoKeys = Object.keys(info.__proto__).filter(
+          key => key !== "constructor" && key !== "toJSON"
+        );
+        for (const key of infoKeys) {
+          ok(
+            EXPECTED_ADAPTER_INFO_KEYS.includes(key),
+            `Found unexpected adapter info field ${key}`
+          );
+        }
+
+        ok(
+          adapter.features.size == 1 && adapter.features.has("core-features-and-limits"),
+          'should report features = ["core-features-and-limits"]',
+        );
+      };
+
+      SimpleTest.waitForExplicitFinish();
+      func()
+        .catch(e => ok(false, "Unhandled exception " + e))
+        .finally(() => SimpleTest.finish());
+    </script>
+  </body>
+</html>

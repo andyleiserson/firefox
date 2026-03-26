@@ -95,6 +95,23 @@ fn d3d12_expose_adapter(
         .add(1);
 }
 
+/// Helper to only report a limit if it differs from the adapter's limit bucket.
+///
+/// If `raw` is `None` (no limit bucket was applied), report `actual`.
+/// If `raw` is `Some` and `actual` differs from `raw`, report `raw` (that is the useful information
+/// for telemetry purposes -- `actual` is the bucket limit which is a known value).
+/// Otherwise, do not report the limit.
+fn maybe_report<T: Copy + PartialEq + TryInto<i64>>(actual: T, raw: Option<T>) -> Option<i64> {
+    match raw {
+        // A limit bucket was applied. Report the raw limit if it differs from the bucket's value
+        // (which we already know, so isn't useful to report through telemetry).
+        Some(raw) => (actual != raw).then_some(raw),
+        // No limit bucket was applied. Report the device's actual limit.
+        None => Some(actual),
+    }
+    .map(|report_val| report_val.try_into().unwrap_or(i64::MAX))
+}
+
 pub fn report_adapter(
     features: wgt::FeaturesWebGPU,
     info: &wgt::AdapterInfo,
@@ -194,60 +211,143 @@ pub fn report_adapter(
 
     let is_fallback = device_type == wgt::DeviceType::Cpu;
 
+    let raw_limits = limit_bucket.as_ref().map(|b| &b.raw_limits);
+
     let limits = DefaultAdapterObjectItemLimitsObject {
-        maxBindGroups: Some(max_bind_groups.into()),
+        maxBindGroups: maybe_report(max_bind_groups, raw_limits.map(|r| r.max_bind_groups)),
         maxBindGroupsPlusVertexBuffers: None,
-        maxImmediateSize: Some(max_immediate_size.into()),
-        maxBindingsPerBindGroup: Some(max_bindings_per_bind_group.into()),
-        maxBufferSize: Some(max_buffer_size.try_into().unwrap_or(i64::MAX)),
-        maxColorAttachmentBytesPerSample: Some(max_color_attachment_bytes_per_sample.into()),
-        maxColorAttachments: Some(max_color_attachments.into()),
-        maxComputeInvocationsPerWorkgroup: Some(max_compute_invocations_per_workgroup.into()),
-        maxComputeWorkgroupSizeX: Some(max_compute_workgroup_size_x.into()),
-        maxComputeWorkgroupSizeY: Some(max_compute_workgroup_size_y.into()),
-        maxComputeWorkgroupSizeZ: Some(max_compute_workgroup_size_z.into()),
-        maxComputeWorkgroupStorageSize: Some(max_compute_workgroup_storage_size.into()),
-        maxComputeWorkgroupsPerDimension: Some(max_compute_workgroups_per_dimension.into()),
-        maxDynamicStorageBuffersPerPipelineLayout: Some(
-            max_dynamic_storage_buffers_per_pipeline_layout.into(),
+        maxImmediateSize: maybe_report(
+            max_immediate_size,
+            raw_limits.map(|r| r.max_immediate_size),
         ),
-        maxDynamicUniformBuffersPerPipelineLayout: Some(
-            max_dynamic_uniform_buffers_per_pipeline_layout.into(),
+        maxBindingsPerBindGroup: maybe_report(
+            max_bindings_per_bind_group,
+            raw_limits.map(|r| r.max_bindings_per_bind_group),
         ),
-        maxInterStageShaderVariables: Some(max_inter_stage_shader_variables.into()),
-        maxSampledTexturesPerShaderStage: Some(max_sampled_textures_per_shader_stage.into()),
-        maxSamplersPerShaderStage: Some(max_samplers_per_shader_stage.into()),
+        maxBufferSize: maybe_report(max_buffer_size, raw_limits.map(|r| r.max_buffer_size)),
+        maxColorAttachmentBytesPerSample: maybe_report(
+            max_color_attachment_bytes_per_sample,
+            raw_limits.map(|r| r.max_color_attachment_bytes_per_sample),
+        ),
+        maxColorAttachments: maybe_report(
+            max_color_attachments,
+            raw_limits.map(|r| r.max_color_attachments),
+        ),
+        maxComputeInvocationsPerWorkgroup: maybe_report(
+            max_compute_invocations_per_workgroup,
+            raw_limits.map(|r| r.max_compute_invocations_per_workgroup),
+        ),
+        maxComputeWorkgroupSizeX: maybe_report(
+            max_compute_workgroup_size_x,
+            raw_limits.map(|r| r.max_compute_workgroup_size_x),
+        ),
+        maxComputeWorkgroupSizeY: maybe_report(
+            max_compute_workgroup_size_y,
+            raw_limits.map(|r| r.max_compute_workgroup_size_y),
+        ),
+        maxComputeWorkgroupSizeZ: maybe_report(
+            max_compute_workgroup_size_z,
+            raw_limits.map(|r| r.max_compute_workgroup_size_z),
+        ),
+        maxComputeWorkgroupStorageSize: maybe_report(
+            max_compute_workgroup_storage_size,
+            raw_limits.map(|r| r.max_compute_workgroup_storage_size),
+        ),
+        maxComputeWorkgroupsPerDimension: maybe_report(
+            max_compute_workgroups_per_dimension,
+            raw_limits.map(|r| r.max_compute_workgroups_per_dimension),
+        ),
+        maxDynamicStorageBuffersPerPipelineLayout: maybe_report(
+            max_dynamic_storage_buffers_per_pipeline_layout,
+            raw_limits.map(|r| r.max_dynamic_storage_buffers_per_pipeline_layout),
+        ),
+        maxDynamicUniformBuffersPerPipelineLayout: maybe_report(
+            max_dynamic_uniform_buffers_per_pipeline_layout,
+            raw_limits.map(|r| r.max_dynamic_uniform_buffers_per_pipeline_layout),
+        ),
+        maxInterStageShaderVariables: maybe_report(
+            max_inter_stage_shader_variables,
+            raw_limits.map(|r| r.max_inter_stage_shader_variables),
+        ),
+        maxSampledTexturesPerShaderStage: maybe_report(
+            max_sampled_textures_per_shader_stage,
+            raw_limits.map(|r| r.max_sampled_textures_per_shader_stage),
+        ),
+        maxSamplersPerShaderStage: maybe_report(
+            max_samplers_per_shader_stage,
+            raw_limits.map(|r| r.max_samplers_per_shader_stage),
+        ),
         maxStorageBuffersInFragmentStage: None,
         maxStorageBuffersInVertexStage: None,
-        maxStorageBuffersPerShaderStage: Some(max_storage_buffers_per_shader_stage.into()),
+        maxStorageBuffersPerShaderStage: maybe_report(
+            max_storage_buffers_per_shader_stage,
+            raw_limits.map(|r| r.max_storage_buffers_per_shader_stage),
+        ),
         maxStorageTexturesInFragmentStage: None,
         maxStorageTexturesInVertexStage: None,
-        maxStorageTexturesPerShaderStage: Some(max_storage_textures_per_shader_stage.into()),
-        maxStorageBufferBindingSize: Some(
-            max_storage_buffer_binding_size
-                .try_into()
-                .unwrap_or(i64::MAX),
+        maxStorageTexturesPerShaderStage: maybe_report(
+            max_storage_textures_per_shader_stage,
+            raw_limits.map(|r| r.max_storage_textures_per_shader_stage),
         ),
-        maxTextureArrayLayers: Some(max_texture_array_layers.into()),
-        maxTextureDimension1D: Some(max_texture_dimension_1d.into()),
-        maxTextureDimension2D: Some(max_texture_dimension_2d.into()),
-        maxTextureDimension3D: Some(max_texture_dimension_3d.into()),
-        maxUniformBufferBindingSize: Some(
-            max_uniform_buffer_binding_size
-                .try_into()
-                .unwrap_or(i64::MAX),
+        maxStorageBufferBindingSize: maybe_report(
+            max_storage_buffer_binding_size,
+            raw_limits.map(|r| r.max_storage_buffer_binding_size),
         ),
-        maxUniformBuffersPerShaderStage: Some(max_uniform_buffers_per_shader_stage.into()),
-        maxVertexAttributes: Some(max_vertex_attributes.into()),
-        maxVertexBuffers: Some(max_vertex_buffers.into()),
-        maxVertexBufferArrayStride: Some(max_vertex_buffer_array_stride.into()),
-        minStorageBufferOffsetAlignment: Some(min_storage_buffer_offset_alignment.into()),
-        minUniformBufferOffsetAlignment: Some(min_uniform_buffer_offset_alignment.into()),
+        maxTextureArrayLayers: maybe_report(
+            max_texture_array_layers,
+            raw_limits.map(|r| r.max_texture_array_layers),
+        ),
+        maxTextureDimension1D: maybe_report(
+            max_texture_dimension_1d,
+            raw_limits.map(|r| r.max_texture_dimension_1d),
+        ),
+        maxTextureDimension2D: maybe_report(
+            max_texture_dimension_2d,
+            raw_limits.map(|r| r.max_texture_dimension_2d),
+        ),
+        maxTextureDimension3D: maybe_report(
+            max_texture_dimension_3d,
+            raw_limits.map(|r| r.max_texture_dimension_3d),
+        ),
+        maxUniformBufferBindingSize: maybe_report(
+            max_uniform_buffer_binding_size,
+            raw_limits.map(|r| r.max_uniform_buffer_binding_size),
+        ),
+        maxUniformBuffersPerShaderStage: maybe_report(
+            max_uniform_buffers_per_shader_stage,
+            raw_limits.map(|r| r.max_uniform_buffers_per_shader_stage),
+        ),
+        maxVertexAttributes: maybe_report(
+            max_vertex_attributes,
+            raw_limits.map(|r| r.max_vertex_attributes),
+        ),
+        maxVertexBuffers: maybe_report(
+            max_vertex_buffers,
+            raw_limits.map(|r| r.max_vertex_buffers),
+        ),
+        maxVertexBufferArrayStride: maybe_report(
+            max_vertex_buffer_array_stride,
+            raw_limits.map(|r| r.max_vertex_buffer_array_stride),
+        ),
+        minStorageBufferOffsetAlignment: maybe_report(
+            min_storage_buffer_offset_alignment,
+            raw_limits.map(|r| r.min_storage_buffer_offset_alignment),
+        ),
+        minUniformBufferOffsetAlignment: maybe_report(
+            min_uniform_buffer_offset_alignment,
+            raw_limits.map(|r| r.min_uniform_buffer_offset_alignment),
+        ),
     };
 
     let info = DefaultAdapterObjectItemInfoObject {
-        subgroupMinSize: Some(subgroup_min_size.into()),
-        subgroupMaxSize: Some(subgroup_max_size.into()),
+        subgroupMinSize: maybe_report(
+            subgroup_min_size,
+            limit_bucket.as_ref().map(|b| b.raw_subgroup_min_size),
+        ),
+        subgroupMaxSize: maybe_report(
+            subgroup_max_size,
+            limit_bucket.as_ref().map(|b| b.raw_subgroup_max_size),
+        ),
         deviceName: (!device_name.is_empty()).then(|| device_name.clone()),
         vendorId: NonZeroI64::new(vendor_id.into()).map(|v| v.get()),
         deviceId: NonZeroI64::new(device_id.into()).map(|v| v.get()),
@@ -257,9 +357,16 @@ pub fn report_adapter(
         limitBucket: limit_bucket.as_ref().map(|b| b.name.to_string()),
     };
 
+    let report_features = if let Some(bucket) = limit_bucket {
+        // A limit bucket was applied. Report any device features that are not included in the bucket.
+        bucket.raw_features.features_webgpu.difference(features)
+    } else {
+        // No limit bucket was applied. Report the device's features.
+        features
+    };
     let mut feature_strs =
-        Vec::with_capacity(usize::try_from(features.bits().count_ones() as u64).unwrap());
-    for f in features.iter() {
+        Vec::with_capacity(usize::try_from(report_features.bits().count_ones() as u64).unwrap());
+    for f in report_features.iter() {
         match wgt::Features::as_str(&f.into()) {
             Some(name) => feature_strs.push(name),
             None => {

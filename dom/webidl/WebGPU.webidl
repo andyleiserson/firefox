@@ -85,6 +85,7 @@ interface GPUAdapterInfo {
     [ChromeOnly] readonly attribute DOMString wgpuDriver;
     [ChromeOnly] readonly attribute DOMString wgpuDriverInfo;
     [ChromeOnly] readonly attribute DOMString wgpuBackend;
+    [ChromeOnly] readonly attribute DOMString wgpuLimitBucket;
 };
 
 interface mixin NavigatorGPU {
@@ -111,6 +112,7 @@ dictionary GPURequestAdapterOptions {
     GPUPowerPreference powerPreference;
     boolean forceFallbackAdapter = false;
     boolean xrCompatible = false;
+    [ChromeOnly] boolean applyLimitBuckets;
 };
 
 enum GPUPowerPreference {

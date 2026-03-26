@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="/tests/SimpleTest/SimpleTest.js"></script>
+    <script src="limits.js"></script>
+    <link rel="stylesheet" href="/tests/SimpleTest/test.css" />
+  </head>
+  <body>
+    <script>
+      ok(
+        SpecialPowers.getBoolPref("dom.webgpu.enabled"),
+        "Pref should be enabled."
+      );
+
+      const func = async function () {
+        const adapter = await navigator.gpu.requestAdapter();
+        ok(adapter, "Got adapter");
+
+	// With RFP off, we mostly expect to see the "unlimited" limit values
+	// that the noop backend uses by default, but in a few cases they are
+	// reduced by `restrict_limits` in `gfx/wgpu_bindings/src/server.rs`.
+	// (We don't bother to check them all; there are more limit-related
+	// tests in `wgpu`.)
+
+        is(
+          adapter.limits.maxTextureDimension1D,
+          MAX_TEXTURE_DIMENSION,
+          "maxTextureDimension1D should be unlimited"
+        );
+        is(
+          adapter.limits.maxBindGroups,
+          NOOP_UNLIMITED,
+          "maxBindGroups should be unlimited"
+        );
+        is(
+          adapter.limits.maxVertexBuffers,
+          NOOP_UNLIMITED,
+          "maxVertexBuffers should be unlimited"
+        );
+        is(
+          adapter.limits.maxComputeInvocationsPerWorkgroup,
+          NOOP_UNLIMITED,
+          "maxComputeInvocationsPerWorkgroup should be unlimited"
+        );
+        is(
+          adapter.limits.maxStorageBufferBindingSize,
+          MAX_BUFFER_SIZE,
+          "maxStorageBufferBindingSize should be unlimited"
+        );
+        is(
+          adapter.limits.maxBufferSize,
+          MAX_BUFFER_SIZE,
+          "maxBufferSize should be unlimited"
+        );
+
+        const info = adapter.info;
+        is(info.subgroupMinSize, 4);
+        is(info.subgroupMaxSize, 128);
+        is(info.isFallbackAdapter, true); // noop backend reports DeviceType::Other
+
+        ok(adapter.features.size > 0, "features should not be empty");
+      };
+
+      SimpleTest.waitForExplicitFinish();
+      func()
+        .catch(e => ok(false, "Unhandled exception " + e))
+        .finally(() => SimpleTest.finish());
+    </script>
+  </body>
+</html>
