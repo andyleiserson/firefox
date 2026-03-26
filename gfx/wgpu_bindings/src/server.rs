@@ -1533,7 +1533,7 @@ extern "C" {
         txn_id: crate::RemoteTextureTxnId,
     );
     #[cfg(target_os = "windows")]
-    fn wgpu_parent_get_compositor_device_luid(out_luid: *mut crate::FfiLUID);
+    fn wgpu_parent_get_compositor_device_luid(out_luid: *mut crate::FfiLUID) -> bool;
     fn wgpu_parent_post_request_device(parent: WebGPUParentPtr, device_id: id::DeviceId);
     fn wgpu_parent_build_buffer_map_closure(
         parent: WebGPUParentPtr,
@@ -2653,22 +2653,15 @@ unsafe fn process_message(
             // webgpu::SharedTexture do not work with wgpu.
             #[cfg(target_os = "windows")]
             {
-                let mut adapter_luid = core::mem::MaybeUninit::<crate::FfiLUID>::uninit();
-                wgpu_parent_get_compositor_device_luid(adapter_luid.as_mut_ptr());
-                let adapter_luid = if adapter_luid.as_ptr().is_null() {
-                    None
-                } else {
-                    Some(adapter_luid.assume_init())
-                };
-
-                if adapter_luid.is_some() && !force_fallback_adapter {
+                let mut adapter_luid = crate::FfiLUID { low_part: 0, high_part: 0 };
+                if wgpu_parent_get_compositor_device_luid(&mut adapter_luid) && !force_fallback_adapter {
                     if let Some(instance) = global.global.instance_as_hal::<wgc::api::Dx12>() {
                         for adapter in instance.enumerate_adapters(None) {
                             let raw_adapter = adapter.adapter.raw_adapter();
                             let desc = unsafe { raw_adapter.GetDesc() };
                             if let Ok(desc) = desc {
-                                if desc.AdapterLuid.LowPart == adapter_luid.unwrap().low_part
-                                    && desc.AdapterLuid.HighPart == adapter_luid.unwrap().high_part
+                                if desc.AdapterLuid.LowPart == adapter_luid.low_part
+                                    && desc.AdapterLuid.HighPart == adapter_luid.high_part
                                 {
                                     global.create_adapter_from_hal(
                                         wgh::DynExposedAdapter::from(adapter),
