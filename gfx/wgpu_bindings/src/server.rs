@@ -2673,9 +2673,13 @@ unsafe fn process_message(
                                         && desc.AdapterLuid.HighPart == adapter_luid.high_part
                                 })
                             })
-                            .find_map(|adapter| wgc::limits::apply_limit_buckets(
-                                wgh::DynExposedAdapter::from(adapter)
-                            ));
+                            .find_map(|adapter| if apply_limit_buckets {
+                                wgc::limits::apply_limit_buckets(
+                                    wgh::DynExposedAdapter::from(adapter)
+                                )
+                            } else {
+                                adapter
+                            });
 
                         if let Some(adapter) = adapter {
                             global.create_adapter_from_hal(adapter, Some(adapter_id));
