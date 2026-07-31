@@ -502,8 +502,33 @@ unsafe fn adapter_request_device(
         }
     }
 
+    // On Linux, if the adapter supports the extensions needed for dma-buf
+    // import, enable them on the device. We pass them to wgpu-core as a
+    // device-creation extension so that device creation still goes through the
+    // normal, validated wgpu-core path, rather than building the `ash::Device`
+    // ourselves and importing it with `create_device_from_hal`.
+    //
+    // wgpu-hal already enables most of these extensions when they are supported;
+    // `VK_KHR_external_semaphore_fd` is the exception. The callback appends any
+    // that are missing (it is a no-op for those wgpu-hal already added).
     #[cfg(target_os = "linux")]
-    {
+    let extensions = {
+        fn add_dma_buf_extensions<'arg, 'pnext>(
+            args: wgh::vulkan::CreateDeviceCallbackArgs<'arg, 'pnext, 'static>,
+        ) {
+            let extensions = args.extensions;
+            for name in [
+                khr::external_memory_fd::NAME,
+                ash::ext::external_memory_dma_buf::NAME,
+                ash::ext::image_drm_format_modifier::NAME,
+                khr::external_semaphore_fd::NAME,
+            ] {
+                if !extensions.contains(&name) {
+                    extensions.push(name);
+                }
+            }
+        }
+
         let hal_adapter = global.adapter_as_hal::<wgc::api::Vulkan>(self_id);
 
         let support_dma_buf = hal_adapter.as_ref().is_some_and(|hal_adapter| {
@@ -515,114 +540,33 @@ unsafe fn adapter_request_device(
                 && capabilities.supports_extension(khr::external_semaphore_fd::NAME)
         });
 
-        match (hal_adapter, support_dma_buf) {
-            (None, _) => {
-                emit_critical_invalid_note("Vulkan adapter");
-            }
-            (Some(_), false) => {}
-            (Some(hal_adapter), true) => {
-                let mut enabled_extensions =
-                    hal_adapter.required_device_extensions(sanitized_desc.required_features);
-                enabled_extensions.push(khr::external_memory_fd::NAME);
-                enabled_extensions.push(ash::ext::external_memory_dma_buf::NAME);
-                enabled_extensions.push(ash::ext::image_drm_format_modifier::NAME);
-                enabled_extensions.push(khr::external_semaphore_fd::NAME);
-
-                let mut enabled_phd_features = hal_adapter.physical_device_features(
-                    &enabled_extensions,
-                    sanitized_desc.required_features,
-                );
-
-                let raw_instance = hal_adapter.shared_instance().raw_instance();
-                let raw_physical_device = hal_adapter.raw_physical_device();
-
-                let queue_family_index = raw_instance
-                    .get_physical_device_queue_family_properties(raw_physical_device)
-                    .into_iter()
-                    .enumerate()
-                    .find_map(|(queue_family_index, info)| {
-                        if info.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                            Some(queue_family_index as u32)
-                        } else {
-                            None
-                        }
-                    });
-
-                let Some(queue_family_index) = queue_family_index else {
-                    let msg = c"Vulkan device has no graphics queue";
-                    gfx_critical_note(msg.as_ptr());
-                    return Some(format!("Internal Error: Failed to create ash::Device"));
-                };
-
-                let family_info = vk::DeviceQueueCreateInfo::default()
-                    .queue_family_index(queue_family_index)
-                    .queue_priorities(&[1.0]);
-                let family_infos = [family_info];
-
-                let str_pointers = enabled_extensions
-                    .iter()
-                    .map(|&s| {
-                        // Safe because `enabled_extensions` entries have static lifetime.
-                        s.as_ptr()
-                    })
-                    .collect::<Vec<_>>();
-
-                let pre_info = vk::DeviceCreateInfo::default()
-                    .queue_create_infos(&family_infos)
-                    .enabled_extension_names(&str_pointers);
-                let info = enabled_phd_features.add_to_device_create(pre_info);
-
-                let raw_device = match raw_instance.create_device(raw_physical_device, &info, None)
-                {
-                    Err(err) => {
-                        let msg =
-                            CString::new(format!("create_device() failed: {:?}", err)).unwrap();
-                        gfx_critical_note(msg.as_ptr());
-                        return Some(format!("Internal Error: Failed to create ash::Device"));
-                    }
-                    Ok(raw_device) => raw_device,
-                };
-
-                let hal_device = match hal_adapter.device_from_raw(
-                    raw_device,
-                    None,
-                    &enabled_extensions,
-                    sanitized_desc.required_features,
-                    &sanitized_desc.required_limits,
-                    &sanitized_desc.memory_hints,
-                    family_info.queue_family_index,
-                    0,
-                ) {
-                    Err(err) => {
-                        let msg =
-                            CString::new(format!("device_from_raw() failed: {:?}", err)).unwrap();
-                        gfx_critical_note(msg.as_ptr());
-                        return Some(format!("Internal Error: Failed to create ash::Device"));
-                    }
-                    Ok(hal_device) => hal_device,
-                };
-
-                let res = global.create_device_from_hal(
-                    self_id,
-                    hal_device.into(),
-                    &sanitized_desc,
-                    Some(new_device_id),
-                    Some(new_queue_id),
-                );
-                if let Err(err) = res {
-                    return Some(format!("{err}"));
-                }
-                return None;
-            }
+        if hal_adapter.is_none() {
+            emit_critical_invalid_note("Vulkan adapter");
         }
-    }
 
-    let res = global.adapter_request_device(
-        self_id,
-        &sanitized_desc,
-        Some(new_device_id),
-        Some(new_queue_id),
-    );
+        if support_dma_buf {
+            let callback = wgh::vulkan::DeviceCreateCallback(Box::new(add_dma_buf_extensions));
+            vec![Box::new(callback) as Box<dyn std::any::Any>]
+        } else {
+            Vec::new()
+        }
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let extensions: Vec<Box<dyn std::any::Any>> = Vec::new();
+
+    // SAFETY: The device-creation callback, if any, only appends supported
+    // Vulkan device extensions, so it upholds the `DeviceCreateCallback` safety
+    // contract.
+    let res = unsafe {
+        global.adapter_request_device_ext(
+            self_id,
+            &sanitized_desc,
+            Some(new_device_id),
+            Some(new_queue_id),
+            extensions,
+        )
+    };
     if let Err(err) = res {
         return Some(format!("{err}"));
     } else {
@@ -2854,6 +2798,13 @@ unsafe fn process_message(
         } => {
             let mut result = None;
 
+            let desc = wgt::RequestAdapterOptions {
+                power_preference,
+                force_fallback_adapter,
+                compatible_surface: None,
+                apply_limit_buckets: false,
+            };
+
             // Prefer to use the dx12 backend, if one exists, and use the same DXGI adapter as WebRender.
             // If wgpu uses a different adapter than WebRender, textures created by
             // webgpu::SharedTexture do not work with wgpu.
@@ -2867,41 +2818,41 @@ unsafe fn process_message(
                     Some(adapter_luid.assume_init())
                 };
 
-                if adapter_luid.is_some() && !force_fallback_adapter {
-                    if let Some(instance) = global.global.instance_as_hal::<wgc::api::Dx12>() {
-                        for adapter in instance.enumerate_adapters(None) {
-                            let raw_adapter = adapter.adapter.raw_adapter();
-                            let desc = unsafe { raw_adapter.GetDesc() };
-                            if let Ok(desc) = desc {
-                                if desc.AdapterLuid.LowPart == adapter_luid.unwrap().low_part
-                                    && desc.AdapterLuid.HighPart == adapter_luid.unwrap().high_part
-                                {
-                                    global.create_adapter_from_hal(
-                                        wgh::DynExposedAdapter::from(adapter),
-                                        Some(adapter_id),
-                                    );
-                                    result = Some(true);
-                                    break;
-                                }
+                if let Some(adapter_luid) = adapter_luid {
+                    if !force_fallback_adapter {
+                        // Restrict adapter enumeration to the DXGI adapter with the compositor's
+                        // LUID. The filter runs before wgpu-hal creates a device on each adapter,
+                        // so we never touch the GPUs the compositor isn't using.
+                        let filter = wgh::dx12::AdapterFilter(Box::new(move |id| {
+                            id.luid_low_part == adapter_luid.low_part
+                                && id.luid_high_part == adapter_luid.high_part
+                        }));
+                        let extensions: Vec<(wgt::Backend, Box<dyn std::any::Any>)> =
+                            vec![(wgt::Backend::Dx12, Box::new(filter))];
+                        // SAFETY: The filter only reads adapter identity, so it upholds the
+                        // `AdapterFilter` safety contract.
+                        let created = unsafe {
+                            global.request_adapter_ext(
+                                &desc,
+                                wgt::Backends::DX12,
+                                Some(adapter_id),
+                                extensions,
+                            )
+                        };
+                        result = Some(match created {
+                            Ok(_) => true,
+                            Err(_) => {
+                                log::error!(concat!(
+                                    "Failed to find D3D12 adapter with the same LUID ",
+                                    "that the compositor is using!"
+                                ));
+                                false
                             }
-                        }
-                        if result.is_none() {
-                            log::error!(concat!(
-                                "Failed to find D3D12 adapter with the same LUID ",
-                                "that the compositor is using!"
-                            ));
-                            result = Some(false);
-                        }
+                        });
                     }
                 }
             }
 
-            let desc = wgt::RequestAdapterOptions {
-                power_preference,
-                force_fallback_adapter,
-                compatible_surface: None,
-                apply_limit_buckets: false,
-            };
             if result.is_none() {
                 let created =
                     match global.request_adapter(&desc, wgt::Backends::PRIMARY, Some(adapter_id)) {
