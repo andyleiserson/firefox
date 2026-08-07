@@ -220,7 +220,7 @@ path = "../wgpu-types"
 default-features = false
 
 [build-dependencies.cfg_aliases]
-version = "0.2.1"
+version = "0.2.2"
 
 [target.'cfg(all(target_family = "wasm", not(target_os = "emscripten")))'.dependencies.wgpu-core-deps-wasm]
 version = "30.0.0"

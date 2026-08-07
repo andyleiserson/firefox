@@ -1,5 +1,5 @@
 use alloc::{borrow::ToOwned as _, boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
-use core::{ffi::CStr, marker::PhantomData};
+use core::{any::Any, ffi::CStr, marker::PhantomData};
 
 use ash::{ext, google, khr, vk};
 use parking_lot::Mutex;
@@ -2586,6 +2586,14 @@ impl super::Adapter {
                     .get_physical_device_memory_properties(self.raw)
             }
         };
+        let queue_flags = unsafe {
+            self.instance
+                .raw
+                .get_physical_device_queue_family_properties(self.raw)
+                .get(family_index as usize)
+                .map(|queue_family_properties| queue_family_properties.queue_flags)
+                .ok_or(crate::DeviceError::Unexpected)?
+        };
         let memory_types = &mem_properties.memory_types_as_slice();
         let valid_ash_memory_types = memory_types.iter().enumerate().fold(0, |u, (i, mem)| {
             if self.known_memory_flags.contains(mem.property_flags) {
@@ -2905,6 +2913,7 @@ impl super::Adapter {
         let shared = Arc::new(super::DeviceShared {
             raw: raw_device,
             family_index,
+            queue_flags,
             queue_index,
             raw_queue,
             drop_guard,
@@ -3077,6 +3086,26 @@ impl crate::Adapter for super::Adapter {
         memory_hints: &wgt::MemoryHints,
     ) -> Result<crate::OpenDevice<super::Api>, crate::DeviceError> {
         unsafe { self.open_with_callback(features, limits, memory_hints, None) }
+    }
+
+    unsafe fn open_ext(
+        &self,
+        features: wgt::Features,
+        limits: &wgt::Limits,
+        memory_hints: &wgt::MemoryHints,
+        extensions: Vec<Box<dyn Any>>,
+    ) -> Result<crate::OpenDevice<super::Api>, crate::DeviceError> {
+        let mut callback: Option<Box<super::CreateDeviceCallback<'static>>> = None;
+        for extension in extensions {
+            match extension.downcast::<super::DeviceCreateCallback>() {
+                Ok(cb) => callback = Some(cb.0),
+                Err(other) => panic!(
+                    "unrecognized Vulkan device creation extension: {:?}",
+                    Any::type_id(&*other)
+                ),
+            }
+        }
+        unsafe { self.open_with_callback(features, limits, memory_hints, callback) }
     }
 
     unsafe fn texture_format_capabilities(
