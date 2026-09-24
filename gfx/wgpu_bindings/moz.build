@@ -16,9 +16,9 @@ if CONFIG["COMPILE_ENVIRONMENT"]:
         "wgpu_ffi_generated.h",
         inputs=[
             "/gfx/wgpu_bindings",
-            "/third_party/rust/wgpu-core-remote",
-            "/third_party/rust/wgpu-core-remote-types",
-            "/third_party/rust/wgpu-types",
+            "//home/andy/mozilla-source/wgpu/wgpu-core-remote",
+            "//home/andy/mozilla-source/wgpu/wgpu-core-remote-types",
+            "//home/andy/mozilla-source/wgpu/wgpu-types",
         ],
     )
 

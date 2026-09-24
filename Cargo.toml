@@ -441,3 +441,18 @@ gl_generator = { git = "https://github.com/jamienicol/gl-rs", rev = "71c792dbfe0
 
 # Implement mach2 0.4 in terms of 0.6
 mach2 = { path = "build/rust/mach2" }
+
+# LOCAL BUILD ONLY -- DO NOT SUBMIT: build against the local wgpu checkout.
+[patch."https://github.com/gfx-rs/wgpu"]
+naga = { path = "/home/andy/mozilla-source/wgpu/naga" }
+naga-types = { path = "/home/andy/mozilla-source/wgpu/naga-types" }
+wgpu-core = { path = "/home/andy/mozilla-source/wgpu/wgpu-core" }
+wgpu-core-deps-apple = { path = "/home/andy/mozilla-source/wgpu/wgpu-core/platform-deps/apple" }
+wgpu-core-deps-linux-android-bsd = { path = "/home/andy/mozilla-source/wgpu/wgpu-core/platform-deps/linux-android-bsd" }
+wgpu-core-deps-windows = { path = "/home/andy/mozilla-source/wgpu/wgpu-core/platform-deps/windows" }
+wgpu-core-remote = { path = "/home/andy/mozilla-source/wgpu/wgpu-core-remote" }
+wgpu-core-remote-types = { path = "/home/andy/mozilla-source/wgpu/wgpu-core-remote-types" }
+wgpu-hal = { path = "/home/andy/mozilla-source/wgpu/wgpu-hal" }
+wgpu-naga-bridge = { path = "/home/andy/mozilla-source/wgpu/wgpu-naga-bridge" }
+wgpu-sync = { path = "/home/andy/mozilla-source/wgpu/wgpu-sync" }
+wgpu-types = { path = "/home/andy/mozilla-source/wgpu/wgpu-types" }
