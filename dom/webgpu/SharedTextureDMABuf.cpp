@@ -25,7 +25,7 @@ UniquePtr<SharedTextureDMABuf> SharedTextureDMABuf::Create(
   auto* context = aParent->GetContext();
   int32_t rawFd = -1;
   ffi::WGPUDMABufInfo dmaBufInfo = ffi::wgpu_vkimage_create_with_dma_buf(
-      context, aDeviceId, aWidth, aHeight, &rawFd);
+      context, aDeviceId, aWidth, aHeight, &rawFd, aUsage);
   if (!dmaBufInfo.is_valid || rawFd < 0) {
     gfxCriticalNoteOnce << "Failed to create dma-buf backed VkImage";
     return nullptr;

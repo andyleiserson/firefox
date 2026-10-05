@@ -34,7 +34,7 @@ use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::mem;
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::raw::{c_char, c_void};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -646,14 +646,13 @@ fn adapter_request_device(
                     .adapter_validate_device_descriptor(self_id, &mut sanitized_desc)
                     .map_err(request_device_error_to_ffi)?;
 
-                let mut enabled_extensions =
-                    hal_adapter.required_device_extensions(sanitized_desc.required_features);
+                let hal_features = sanitized_desc.required_features;
+
+                let mut enabled_extensions = hal_adapter.required_device_extensions(hal_features);
                 enabled_extensions.extend_from_slice(DMABUF_DEVICE_EXTENSIONS);
 
-                let mut enabled_phd_features = hal_adapter.physical_device_features(
-                    &enabled_extensions,
-                    sanitized_desc.required_features,
-                );
+                let mut enabled_phd_features =
+                    hal_adapter.physical_device_features(&enabled_extensions, hal_features);
 
                 let raw_instance = hal_adapter.shared_instance().raw_instance();
                 let raw_physical_device = hal_adapter.raw_physical_device();
@@ -725,7 +724,7 @@ fn adapter_request_device(
                             raw_device.clone(),
                             None,
                             &enabled_extensions,
-                            sanitized_desc.required_features,
+                            hal_features,
                             &sanitized_desc.required_limits,
                             &sanitized_desc.memory_hints,
                             family_info.queue_family_index,
@@ -1292,8 +1291,7 @@ pub struct DMABufInfo {
     pub strides: [u64; 3],
 }
 
-/// Destroys a `VkImage` and its dedicated `VkDeviceMemory` unless ownership has
-/// been handed over with [`ScopedVkImage::release`].
+/// Destroys a `VkImage` and its dedicated `VkDeviceMemory` when dropped.
 #[cfg(target_os = "linux")]
 struct ScopedVkImage<'a> {
     device: &'a ash::Device,
@@ -1309,11 +1307,6 @@ impl<'a> ScopedVkImage<'a> {
             image,
             memory: vk::DeviceMemory::null(),
         }
-    }
-
-    fn release(&mut self) {
-        self.image = vk::Image::null();
-        self.memory = vk::DeviceMemory::null();
     }
 }
 
@@ -1383,8 +1376,9 @@ pub extern "C" fn wgpu_vkimage_create_with_dma_buf(
     width: u32,
     height: u32,
     out_fd: *mut i32,
+    usage: wgt::TextureUsages,
 ) -> DMABufInfo {
-    match create_dma_buf(global, device_id, width, height) {
+    match create_dma_buf(global, device_id, width, height, usage) {
         Ok((info, fd)) => {
             unsafe { *out_fd = fd };
             info
@@ -1403,6 +1397,7 @@ fn create_dma_buf(
     device_id: id::DeviceId,
     width: u32,
     height: u32,
+    usage: wgt::TextureUsages,
 ) -> Result<(DMABufInfo, i32), CString> {
     let device = global.resolve_device_id(device_id);
     unsafe {
@@ -1446,8 +1441,7 @@ fn create_dma_buf(
             &mut format_properties_2,
         );
 
-        let mut usage_flags = vk::ImageUsageFlags::empty();
-        usage_flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        let usage_flags = wgh::vulkan::conv::map_texture_usage(dmabuf_texture_uses(usage));
 
         modifier_props.retain(|modifier_prop| {
             is_dmabuf_supported(
@@ -1705,8 +1699,6 @@ extern "C" {
     #[cfg(target_os = "linux")]
     fn wgpu_server_get_dma_buf_info(parent: WebGPUParentPtr, id: id::TextureId) -> DMABufInfo;
     #[cfg(target_os = "linux")]
-    fn wgpu_server_get_dma_buf_fd(parent: WebGPUParentPtr, id: id::TextureId) -> i32;
-    #[cfg(target_os = "linux")]
     fn wgpu_server_get_linux_dmabuf_modifiers(
         modifiers: *mut *const u64,
         modifier_count: *mut u32,
@@ -1825,6 +1817,7 @@ pub unsafe fn is_dmabuf_supported(
         .format(format)
         .ty(vk::ImageType::TYPE_2D)
         .usage(usage)
+        .flags(vk::ImageCreateFlags::ALIAS)
         .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
         .push_next(&mut external_format_info)
         .push_next(&mut modifier_info);
@@ -1858,6 +1851,34 @@ pub unsafe fn is_dmabuf_supported(
         .contains(
             vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::IMPORTABLE,
         )
+}
+
+/// The hal usage of a dma-buf backed swap chain texture with WebGPU usage
+/// `usage`. Both the exported and the imported image are created with it.
+#[cfg(target_os = "linux")]
+fn dmabuf_texture_uses(usage: wgt::TextureUsages) -> wgt::TextureUses {
+    let mut uses = wgt::TextureUses::empty();
+    uses.set(
+        wgt::TextureUses::COPY_SRC,
+        usage.contains(wgt::TextureUsages::COPY_SRC),
+    );
+    uses.set(
+        wgt::TextureUses::COPY_DST,
+        usage.contains(wgt::TextureUsages::COPY_DST),
+    );
+    uses.set(
+        wgt::TextureUses::RESOURCE,
+        usage.contains(wgt::TextureUsages::TEXTURE_BINDING),
+    );
+    uses.set(
+        wgt::TextureUses::STORAGE_WRITE_ONLY,
+        usage.contains(wgt::TextureUsages::STORAGE_BINDING),
+    );
+    uses.set(
+        wgt::TextureUses::COLOR_TARGET,
+        usage.contains(wgt::TextureUsages::RENDER_ATTACHMENT),
+    );
+    uses
 }
 
 #[cfg(target_os = "linux")]
@@ -1968,201 +1989,43 @@ impl Global {
         None
     }
 
+    // Create a `wgpu` texture from a DMABuf.
+    //
+    /// Three outcomes are possible:
+    /// - The texture is imported successfully. Return value is `None`.
+    /// - The import fails before the call to `create_texture_from_hal`.
+    ///   Return value is `Some`, containing the provided `ScopeGuard`,
+    ///   which should populate the texture as invalid.
+    /// - The import failed within the call to `create_texture_from_hal`.
+    ///   In this case `create_texture_from_hal` populates an invalid
+    ///   texture. The `ScopeGuard` is defused and the return value is
+    ///   `None`.
+    //
+    // TODO: document limitations on supported texture types, add
+    // assertions, and other suggestions from the "avoid redundant
+    // texture import" patch.
     #[cfg(target_os = "linux")]
     fn create_texture_with_imported_dmabuf<'a, F: FnOnce(()) + 'a>(
         &self,
         device_id: id::DeviceId,
         texture_id: id::TextureId,
-        desc: &TextureDescriptor,
+        desc: &'a TextureDescriptor,
+        owned_fd: OwnedFd,
+        info: &DMABufInfo,
         guard: ScopeGuard<(), F>,
     ) -> Option<ScopeGuard<(), F>> {
         unsafe {
-            let info = wgpu_server_get_dma_buf_info(self.owner, texture_id);
-            if !info.is_valid {
-                let msg = c"Failed to get DMABufInfo";
-                gfx_critical_note(msg.as_ptr());
-                return Some(guard);
-            }
-            if info.plane_count as usize > info.offsets.len() {
-                let msg = c"Invalid dmabuf plane count";
-                gfx_critical_note(msg.as_ptr());
-                return Some(guard);
-            }
-
-            let fd = wgpu_server_get_dma_buf_fd(self.owner, texture_id);
-            if fd < 0 {
-                let msg = c"Failed to get DMABuf fd";
-                gfx_critical_note(msg.as_ptr());
-                return Some(guard);
-            }
-
-            // Ensure to close file descriptor
-            let owned_fd = OwnedFd::from_raw_fd(fd as RawFd);
-
             let device = self.resolve_device_id(device_id);
             let hal_device = device
                 .as_hal::<wgc::api::Vulkan>()
                 .expect("Vulkan backend device on linux");
 
-            let device = hal_device.raw_device();
-            let instance = hal_device.shared_instance().raw_instance();
-            let physical_device = hal_device.raw_physical_device();
-
-            let extent = vk::Extent3D {
-                width: desc.size.width,
-                height: desc.size.height,
-                depth: 1,
-            };
-            let mut usage_flags = vk::ImageUsageFlags::empty();
-            usage_flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
-
-            let mut external_image_create_info = vk::ExternalMemoryImageCreateInfo::default()
-                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-
-            // Surprising rule:
-            //
-            // > VUID-VkImageDrmFormatModifierExplicitCreateInfoEXT-size-02267:
-            // > For each element of pPlaneLayouts, size must be 0
-            //
-            // Rationale:
-            //
-            // > In each element of pPlaneLayouts, the implementation must ignore
-            // > size. The implementation calculates the size of each plane, which
-            // > the application can query with vkGetImageSubresourceLayout.
-            //
-            // So, the plane layouts we rebuild here leave `size` at 0.
-            let memory_plane_layouts: Vec<_> = (0..info.plane_count as usize)
-                .map(|i| vk::SubresourceLayout {
+            let plane_layouts: Vec<_> = (0..info.plane_count as usize)
+                .map(|i| wgh::vulkan::DmaBufPlaneLayout {
                     offset: info.offsets[i],
-                    size: 0,
-                    row_pitch: info.strides[i],
-                    array_pitch: 0,
-                    depth_pitch: 0,
+                    stride: info.strides[i],
                 })
                 .collect();
-
-            // VUID-VkImageCreateInfo-pNext-00990
-            //
-            // Since `wgpu_vkimage_create_with_dma_buf` above succeeded in
-            // creating the original DMABuf image, if we pass the same
-            // parameters, including the DRM format modifier and plane layouts,
-            // we can assume that this call will succeed too.
-            //
-            // The only thing we're adding is the `ALIAS` flag, because this
-            // aliases the original image.
-            let mut modifier_list = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
-                .drm_format_modifier(info.modifier)
-                .plane_layouts(&memory_plane_layouts);
-
-            let vk_info = vk::ImageCreateInfo::default()
-                .flags(vk::ImageCreateFlags::ALIAS)
-                .image_type(vk::ImageType::TYPE_2D)
-                // Bug 1971883: Rather than hard-coding this format, we should use
-                // whatever format was negotiated between `GPUCanvasContext.configure`
-                // and the GPU process.
-                .format(vk::Format::B8G8R8A8_UNORM)
-                .extent(extent)
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-                .usage(usage_flags)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .push_next(&mut modifier_list)
-                .push_next(&mut external_image_create_info);
-
-            let image = match device.create_image(&vk_info, None) {
-                Err(err) => {
-                    let msg = CString::new(format!(
-                        "Failed to get vk::Image: create_image() failed: {:?}",
-                        err
-                    ))
-                    .unwrap();
-                    gfx_critical_note(msg.as_ptr());
-                    return Some(guard);
-                }
-                Ok(image) => image,
-            };
-
-            // Every early return below destroys the image, and its memory once
-            // allocated, through this guard.
-            let mut scoped_image = ScopedVkImage::new(device, image);
-
-            // The memory requirements of this image are not necessarily the
-            // ones of the image the dma-buf was allocated from, so they must be
-            // queried afresh: `VUID-VkMemoryAllocateInfo-memoryTypeIndex-00648`
-            // and `VUID-VkMemoryDedicatedAllocateInfo-image-02964`.
-            let memory_req = dedicated_image_memory_requirements(instance, device, image);
-
-            let mut fd_props = vk::MemoryFdPropertiesKHR::default();
-            let external_memory_fd = khr::external_memory_fd::Device::new(instance, device);
-            if let Err(err) = external_memory_fd.get_memory_fd_properties(
-                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                owned_fd.as_raw_fd(),
-                &mut fd_props,
-            ) {
-                let msg =
-                    CString::new(format!("get_memory_fd_properties() failed: {:?}", err)).unwrap();
-                gfx_critical_note(msg.as_ptr());
-                return Some(guard);
-            }
-
-            let mem_properties = instance.get_physical_device_memory_properties(physical_device);
-            let memory_type_index = select_memory_type(
-                &mem_properties,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                memory_req.memory_type_bits & fd_props.memory_type_bits,
-            );
-            let Some(memory_type_index) = memory_type_index else {
-                let msg = c"Failed to find a memory type for the imported dmabuf";
-                gfx_critical_note(msg.as_ptr());
-                return Some(guard);
-            };
-
-            let mut dedicated_memory_info = vk::MemoryDedicatedAllocateInfo::default().image(image);
-
-            let mut import_memory_fd_info = vk::ImportMemoryFdInfoKHR::default()
-                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                .fd(owned_fd.as_raw_fd());
-
-            let memory_allocate_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(memory_req.size)
-                .memory_type_index(memory_type_index)
-                .push_next(&mut dedicated_memory_info)
-                .push_next(&mut import_memory_fd_info);
-
-            // `vkAllocateMemory` takes ownership of the fd on success only, so
-            // `owned_fd` closes it for us on every failure path above and here.
-            let memory = match device.allocate_memory(&memory_allocate_info, None) {
-                Err(err) => {
-                    let msg = CString::new(format!(
-                        "Failed to get vk::Image: allocate_memory() failed: {:?}",
-                        err
-                    ))
-                    .unwrap();
-                    gfx_critical_note(msg.as_ptr());
-                    return Some(guard);
-                }
-                Ok(memory) => {
-                    let _ = owned_fd.into_raw_fd();
-                    memory
-                }
-            };
-            scoped_image.memory = memory;
-
-            match device.bind_image_memory(image, memory, /* offset */ 0) {
-                Ok(()) => {}
-                Err(err) => {
-                    let msg = CString::new(format!(
-                        "Failed to get vk::Image: bind_image_memory() failed: {:?}",
-                        err
-                    ))
-                    .unwrap();
-                    gfx_critical_note(msg.as_ptr());
-                    return Some(guard);
-                }
-            }
 
             let hal_desc = wgh::TextureDescriptor {
                 label: None,
@@ -2171,21 +2034,31 @@ impl Global {
                 sample_count: desc.sample_count,
                 dimension: desc.dimension,
                 format: desc.format,
-                usage: wgt::TextureUses::COPY_DST | wgt::TextureUses::COLOR_TARGET,
+                usage: dmabuf_texture_uses(desc.usage),
                 memory_flags: wgh::MemoryFlags::empty(),
                 view_formats: vec![],
             };
 
-            let hal_texture = <wgh::api::Vulkan as wgh::Api>::Device::texture_from_raw(
-                &hal_device,
-                image,
+            // The image created by `wgpu_vkimage_create_with_dma_buf` used
+            // `ALIAS` too.
+            let hal_texture = match hal_device.texture_from_dmabuf_fd(
+                owned_fd,
                 &hal_desc,
-                None,
-                wgh::vulkan::TextureMemory::Dedicated(memory),
-            );
+                info.modifier,
+                &plane_layouts,
+                /* alias */ true,
+            ) {
+                Ok(hal_texture) => hal_texture,
+                Err(err) => {
+                    let msg = CString::new(format!("texture_from_dmabuf_fd() failed: {:?}", err))
+                        .unwrap();
+                    gfx_critical_note(msg.as_ptr());
+                    return Some(guard);
+                }
+            };
 
-            // `create_texture_from_hal` populates an invalid texture on failure, so
-            // defuse the guard now.
+            // `create_texture_from_hal` destroys `hal_texture` and populates
+            // `texture_id` as invalid on failure, so defuse the guard now.
             ScopeGuard::into_inner(guard);
 
             let (_, error) = self.create_texture_from_hal(
@@ -2205,10 +2078,6 @@ impl Global {
                 gfx_critical_note(msg.as_ptr());
                 // Texture was already populated as invalid.
             }
-
-            // We've successfully imported the texture. wgpu-core now owns
-            // the image and its memory.
-            scoped_image.release();
 
             None
         }
@@ -2284,8 +2153,39 @@ impl Global {
         }
 
         #[cfg(target_os = "linux")]
-        {
-            self.create_texture_with_imported_dmabuf(device_id, texture_id, &desc, guard)
+        unsafe {
+            let info = wgpu_server_get_dma_buf_info(self.owner, texture_id);
+            if !info.is_valid {
+                let msg = c"Failed to get DMABufInfo";
+                gfx_critical_note(msg.as_ptr());
+                return Some(guard);
+            }
+            if info.plane_count as usize > info.offsets.len() {
+                let msg = c"Invalid dmabuf plane count";
+                gfx_critical_note(msg.as_ptr());
+                return Some(guard);
+            }
+
+            if info.fds[0] < 0 {
+                let msg = c"Failed to get DMABuf fd";
+                gfx_critical_note(msg.as_ptr());
+                return Some(guard);
+            }
+
+            // Ensure we close file descriptors
+            let owned_fd = OwnedFd::from_raw_fd(info.fds[0]);
+            let _ = OwnedFd::from_raw_fd(info.fds[1]);
+            let _ = OwnedFd::from_raw_fd(info.fds[2]);
+            let _ = OwnedFd::from_raw_fd(info.fds[3]);
+
+            self.create_texture_with_imported_dmabuf(
+                device_id,
+                texture_id,
+                &desc,
+                owned_fd,
+                &info,
+                guard,
+            )
         }
 
         #[cfg(target_os = "macos")]
@@ -3735,7 +3635,7 @@ mod macos {
                 // Texture was already populated as invalid.
             }
 
-            None
+            Ok(())
         }
     }
 }
