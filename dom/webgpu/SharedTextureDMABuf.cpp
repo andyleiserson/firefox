@@ -4,8 +4,10 @@
 
 #include "SharedTextureDMABuf.h"
 
+#include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/webgpu/WebGPUParent.h"
+#include "mozilla/widget/BufferSurface.h"
 #include "mozilla/widget/DMABufDevice.h"
 #include "mozilla/widget/DMABufSurface.h"
 
@@ -23,16 +25,25 @@ UniquePtr<SharedTextureDMABuf> SharedTextureDMABuf::Create(
   }
 
   auto* context = aParent->GetContext();
-  int32_t rawFd = -1;
-  ffi::WGPUDMABufInfo dmaBufInfo = ffi::wgpu_vkimage_create_with_dma_buf(
-      context, aDeviceId, aWidth, aHeight, &rawFd, aUsage);
-  if (!dmaBufInfo.is_valid || rawFd < 0) {
+  ffi::WGPUDMABufInfo ffiDmaBufInfo = ffi::wgpu_vkimage_create_with_dma_buf(
+      context, aDeviceId, aWidth, aHeight, aUsage);
+  if (!ffiDmaBufInfo.is_valid) {
     gfxCriticalNoteOnce << "Failed to create dma-buf backed VkImage";
     return nullptr;
   }
 
-  RefPtr<gfx::FileHandleWrapper> fd =
-      new gfx::FileHandleWrapper(UniqueFileHandle(rawFd));
+  DMABufInfo dmaBufInfo = {
+    .is_valid = ffiDmaBufInfo.is_valid,
+    .modifier = ffiDmaBufInfo.modifier,
+    .plane_count = ffiDmaBufInfo.plane_count,
+  };
+  std::array<RefPtr<gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES> fds;
+
+  for (size_t i = 0; i < ffiDmaBufInfo.plane_count; ++i) {
+    dmaBufInfo.offsets[i] = ffiDmaBufInfo.offsets[i];
+    dmaBufInfo.strides[i] = ffiDmaBufInfo.strides[i];
+    fds[i] = new gfx::FileHandleWrapper(UniqueFileHandle(ffiDmaBufInfo.fds[i]));
+  }
 
   MOZ_ASSERT(dmaBufInfo.plane_count <= 3);
 
@@ -42,7 +53,7 @@ UniquePtr<SharedTextureDMABuf> SharedTextureDMABuf::Create(
   }
 
   RefPtr<DMABufSurface> surface = DMABufSurfaceRGBA::CreateDMABufSurface(
-      std::move(fd), dmaBufInfo, aWidth, aHeight);
+      std::move(fds), dmaBufInfo, aWidth, aHeight);
   if (!surface) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     return nullptr;
@@ -70,7 +81,7 @@ SharedTextureDMABuf::SharedTextureDMABuf(
     const struct ffi::WGPUTextureFormat aFormat,
     const ffi::WGPUTextureUsages aUsage, RefPtr<DMABufSurface>&& aSurface,
     const layers::SurfaceDescriptorDMABuf& aSurfaceDescriptor,
-    const ffi::WGPUDMABufInfo& aDMABufInfo)
+    const DMABufInfo& aDMABufInfo)
     : SharedTexture(aWidth, aHeight, aFormat, aUsage),
       mSurface(std::move(aSurface)),
       mSurfaceDescriptor(aSurfaceDescriptor),
@@ -141,8 +152,19 @@ void SharedTextureDMABuf::GetSnapshot(const ipc::Shmem& aDestShmem,
   }
 }
 
-UniqueFileHandle SharedTextureDMABuf::CloneDmaBufFd() {
-  return mSurfaceDescriptor.fds()[0]->ClonePlatformHandle();
+/**
+ * Clones and returns file descriptors for the surface.
+ *
+ * The caller assumes ownership of (i.e. responsibility for closing) the cloned descriptors.
+ */
+std::array<detail::FileHandleType, BUFFER_SURFACE_PLANES> SharedTextureDMABuf::CloneDmaBufFds() {
+  std::array<detail::FileHandleType, BUFFER_SURFACE_PLANES> fds;
+
+  for (size_t i = 0; i < mDMABufInfo.plane_count; ++i) {
+    fds[i] = mSurfaceDescriptor.fds()[i]->ClonePlatformHandle().release();
+  }
+
+  return fds;
 }
 
 void SharedTextureDMABuf::onBeforeQueueSubmit(

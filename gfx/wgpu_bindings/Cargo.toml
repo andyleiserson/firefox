@@ -90,6 +90,7 @@ arrayvec = "0.7"
 ash = "0.38"
 glean = { workspace = true }
 firefox-on-glean = { path = "../../toolkit/components/glean/api" }
+libc = "0.2"
 moz_task = { path = "../../xpcom/rust/moz_task" }
 futures-channel = "0.3"
 futures-util = { version = "0.3", default-features = false }

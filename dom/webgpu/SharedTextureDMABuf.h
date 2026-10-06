@@ -6,7 +6,9 @@
 #define GPU_SharedTextureDMABuf_H_
 
 #include "mozilla/gfx/FileHandleWrapper.h"
+#include "mozilla/webgpu/ffi/wgpu.h"
 #include "mozilla/webgpu/SharedTexture.h"
+#include "mozilla/widget/DMABufSurface.h"
 #include "nsTArrayForwardDeclare.h"
 
 class DMABufSurface;
@@ -28,7 +30,7 @@ class SharedTextureDMABuf final : public SharedTexture {
                       const ffi::WGPUTextureUsages aUsage,
                       RefPtr<DMABufSurface>&& aSurface,
                       const layers::SurfaceDescriptorDMABuf& aSurfaceDescriptor,
-                      const ffi::WGPUDMABufInfo& aDMABufInfo);
+                      const DMABufInfo& aDMABufInfo);
   virtual ~SharedTextureDMABuf();
 
   Maybe<layers::SurfaceDescriptor> ToSurfaceDescriptor() override;
@@ -43,14 +45,14 @@ class SharedTextureDMABuf final : public SharedTexture {
 
   void CleanForRecycling() override;
 
-  UniqueFileHandle CloneDmaBufFd();
+  std::array<detail::FileHandleType, 4> CloneDmaBufFds();
 
-  const ffi::WGPUDMABufInfo& GetDMABufInfo() const { return mDMABufInfo; }
+  const DMABufInfo& GetDMABufInfo() const { return mDMABufInfo; }
 
  protected:
   RefPtr<DMABufSurface> mSurface;
   const layers::SurfaceDescriptorDMABuf mSurfaceDescriptor;
-  const ffi::WGPUDMABufInfo mDMABufInfo;
+  const DMABufInfo mDMABufInfo;
   RefPtr<gfx::FileHandleWrapper> mSemaphoreFd;
 };
 

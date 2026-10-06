@@ -62,6 +62,7 @@ class Compositor;
 class CompositableParentManager;
 class ReadLockDescriptor;
 class CompositorBridgeParent;
+class DMABUFTextureHostOGL;
 class DXGITextureHostD3D11;
 class DXGIYCbCrTextureHostD3D11;
 class Fence;
@@ -617,6 +618,7 @@ class TextureHost : public AtomicRefCountedWithFinalize<TextureHost> {
   virtual MacIOSurfaceTextureHostOGL* AsMacIOSurfaceTextureHost() {
     return nullptr;
   }
+  virtual DMABUFTextureHostOGL* AsDMABUFTextureHost() { return nullptr; }
   virtual WebRenderTextureHost* AsWebRenderTextureHost() { return nullptr; }
   virtual SurfaceTextureHost* AsSurfaceTextureHost() { return nullptr; }
   virtual AndroidHardwareBufferTextureHost*

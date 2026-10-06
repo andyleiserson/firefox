@@ -68,6 +68,17 @@ namespace mozilla::layers {
 class PlanarYCbCrImage;
 }
 
+// This struct is paired with an owned set of `gfx::FileHandleWrapper`s,
+// while The Rust version `ffi::WGPUDMABufInfo` carries the raw file
+// descriptors inline.
+struct DMABufInfo {
+  bool is_valid;
+  uint64_t modifier;
+  uint32_t plane_count;
+  uint64_t offsets[BUFFER_SURFACE_PLANES];
+  uint64_t strides[BUFFER_SURFACE_PLANES];
+};
+
 class DMABufSurface : public BufferSurface {
  public:
   // Import surface from SurfaceDescriptor. This is usually
@@ -85,6 +96,11 @@ class DMABufSurface : public BufferSurface {
   // Width/Height is size of actual content.
   virtual int GetWidthAligned(int aPlane = 0) = 0;
   virtual int GetHeightAligned(int aPlane = 0) = 0;
+
+  virtual DMABufInfo GetDMABufInfo() = 0;
+  virtual std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES> GetDMABufFds() {
+    return mDmabufFds;
+  }
 
 #ifdef MOZ_LOGGING
   bool IsMapped(int aPlane = 0) { return (mMappedRegion[aPlane] != nullptr); };
@@ -195,7 +211,7 @@ class DMABufSurface : public BufferSurface {
 
   virtual ~DMABufSurface();
 
-  RefPtr<mozilla::gfx::FileHandleWrapper> mDmabufFds[BUFFER_SURFACE_PLANES];
+  std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES> mDmabufFds;
 
   struct gbm_bo* mGbmBufferObject[BUFFER_SURFACE_PLANES]{};
   uint32_t mGbmBufferFlags = 0;
@@ -232,9 +248,8 @@ class DMABufSurfaceRGBA final : public DMABufSurface {
       mozilla::gl::GLContext* aGLContext, GLuint aSrcTexture,
       mozilla::gfx::IntSize aSize, int32_t aFOURCCFormat);
   static already_AddRefed<DMABufSurface> CreateDMABufSurface(
-      RefPtr<mozilla::gfx::FileHandleWrapper>&& aFd,
-      const mozilla::webgpu::ffi::WGPUDMABufInfo& aDMABufInfo, int aWidth,
-      int aHeight);
+      std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES>&& aFds,
+      const DMABufInfo& aDMABufInfo, int aWidth, int aHeight);
 
   bool Serialize(mozilla::layers::SurfaceDescriptor& aOutDescriptor) override;
 
@@ -269,6 +284,8 @@ class DMABufSurfaceRGBA final : public DMABufSurface {
   wl_buffer* CreateWlBuffer() override;
 #endif
 
+  DMABufInfo GetDMABufInfo() override;
+ 
   DMABufSurfaceRGBA();
   DMABufSurfaceRGBA(const DMABufSurfaceRGBA&) = delete;
   DMABufSurfaceRGBA& operator=(const DMABufSurfaceRGBA&) = delete;
@@ -288,9 +305,8 @@ class DMABufSurfaceRGBA final : public DMABufSurface {
                     const mozilla::widget::DRMFormat* aFormat);
 
   bool Create(const mozilla::layers::SurfaceDescriptor& aDesc) override;
-  bool Create(RefPtr<mozilla::gfx::FileHandleWrapper>&& aFd,
-              const mozilla::webgpu::ffi::WGPUDMABufInfo& aDMABufInfo,
-              int aWidth, int aHeight);
+  bool Create(std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES>&& aFds,
+              const DMABufInfo& aDMABufInfo, int aWidth, int aHeight);
   bool Create(mozilla::gl::GLContext* aGLContext, GLuint aSrcTexture,
               mozilla::gfx::IntSize aSize, int32_t aFOURCCFormat);
 
@@ -343,6 +359,7 @@ class DMABufSurfaceYUV final : public DMABufSurface {
 
   void ReleaseSurface() override;
 
+  DMABufInfo GetDMABufInfo() override;
   DMABufSurfaceYUV();
 
   already_AddRefed<DMABufSurfaceRGBA> ConvertHLGToPQ(

@@ -1281,14 +1281,18 @@ pub extern "C" fn wgpu_server_get_device_fence_handle(
     }
 }
 
+// Matches a definition in `widget/gtk/DMABufSurface.h`.
+pub const DMABUF_BUFFER_PLANES: usize = 4;
+
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct DMABufInfo {
     pub is_valid: bool,
     pub modifier: u64,
     pub plane_count: u32,
-    pub offsets: [u64; 3],
-    pub strides: [u64; 3],
+    pub offsets: [u64; DMABUF_BUFFER_PLANES],
+    pub strides: [u64; DMABUF_BUFFER_PLANES],
+    pub fds: [RawFd; DMABUF_BUFFER_PLANES],
 }
 
 /// Destroys a `VkImage` and its dedicated `VkDeviceMemory` when dropped.
@@ -1375,17 +1379,12 @@ pub extern "C" fn wgpu_vkimage_create_with_dma_buf(
     device_id: id::DeviceId,
     width: u32,
     height: u32,
-    out_fd: *mut i32,
     usage: wgt::TextureUsages,
 ) -> DMABufInfo {
     match create_dma_buf(global, device_id, width, height, usage) {
-        Ok((info, fd)) => {
-            unsafe { *out_fd = fd };
-            info
-        }
+        Ok(info) => info,
         Err(msg) => {
             unsafe { gfx_critical_note(msg.as_ptr()) };
-            unsafe { *out_fd = -1 };
             DMABufInfo::default()
         }
     }
@@ -1398,7 +1397,14 @@ fn create_dma_buf(
     width: u32,
     height: u32,
     usage: wgt::TextureUsages,
-) -> Result<(DMABufInfo, i32), CString> {
+) -> Result<DMABufInfo, CString> {
+    const MEMORY_PLANE_ASPECTS: [vk::ImageAspectFlags; 4] = [
+        vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
+    ];
+
     let device = global.resolve_device_id(device_id);
     unsafe {
         let hal_device = device
@@ -1585,24 +1591,6 @@ fn create_dma_buf(
             return Err(msg);
         }
 
-        let mut offsets: [u64; 3] = [0; 3];
-        let mut strides: [u64; 3] = [0; 3];
-        for i in 0..plane_count {
-            // VUID-vkGetImageSubresourceLayout-tiling-09433: For
-            // `DMA_BUF` images, the planes must be identified using the
-            // `MEMORY_PLANE_i_EXT bits, not the `PLANE_i` bits.
-            let flag = match i {
-                0 => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
-                1 => vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
-                2 => vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
-                _ => unreachable!(),
-            };
-            let subresource = vk::ImageSubresource::default().aspect_mask(flag);
-            let layout = device.get_image_subresource_layout(image, subresource);
-            offsets[i as usize] = layout.offset;
-            strides[i as usize] = layout.row_pitch;
-        }
-
         // `vkGetMemoryFdKHR` returns a new file descriptor holding a reference
         // to the memory object's payload, so the dma-buf outlives the
         // `VkDeviceMemory` we free below. This must happen before the free.
@@ -1618,16 +1606,35 @@ fn create_dma_buf(
             Ok(fd) => fd,
         };
 
-        Ok((
-            DMABufInfo {
-                is_valid: true,
-                modifier: image_modifier_properties.drm_format_modifier,
-                plane_count,
-                offsets,
-                strides,
-            },
-            fd,
-        ))
+        let mut offsets = [0; DMABUF_BUFFER_PLANES];
+        let mut strides = [0; DMABUF_BUFFER_PLANES];
+        let mut fds = [-1; DMABUF_BUFFER_PLANES];
+
+        // VUID-vkGetImageSubresourceLayout-tiling-09433: For
+        // `DMA_BUF` images, the planes must be identified using the
+        // `MEMORY_PLANE_i_EXT bits, not the `PLANE_i` bits.
+        let subresource = vk::ImageSubresource::default().aspect_mask(MEMORY_PLANE_ASPECTS[0]);
+        let layout = device.get_image_subresource_layout(image, subresource);
+        offsets[0] = layout.offset;
+        strides[0] = layout.row_pitch;
+        fds[0] = fd;
+
+        for (i, &flag) in std::iter::zip(1..plane_count, MEMORY_PLANE_ASPECTS.iter().skip(1)) {
+            let subresource = vk::ImageSubresource::default().aspect_mask(flag);
+            let layout = device.get_image_subresource_layout(image, subresource);
+            offsets[i as usize] = layout.offset;
+            strides[i as usize] = layout.row_pitch;
+            fds[i as usize] = libc::dup(fd);
+        }
+
+        Ok(DMABufInfo {
+            is_valid: true,
+            modifier: image_modifier_properties.drm_format_modifier,
+            plane_count,
+            offsets,
+            strides,
+            fds,
+        })
     }
 }
 
@@ -2010,22 +2017,71 @@ impl Global {
         device_id: id::DeviceId,
         texture_id: id::TextureId,
         desc: &'a TextureDescriptor,
-        owned_fd: OwnedFd,
         info: &DMABufInfo,
+        alias: bool,
         guard: ScopeGuard<(), F>,
     ) -> Option<ScopeGuard<(), F>> {
+        fn same_fd(fd1: RawFd, fd2: RawFd) -> bool {
+            const DMA_BUF_MAGIC: i64 = 0x444d4142; // "DMAB"
+
+            if fd1 < 0 || fd2 < 0 {
+                return false;
+            }
+            match unsafe { libc::syscall(
+                libc::SYS_kcmp,
+                libc::getpid(),
+                libc::getpid(),
+                0, // KCMP_FILE
+                fd1,
+                fd2,
+            ) } {
+                0 => return true,
+                1 | 2 => return false,
+                _ if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOSYS) => {}
+                _ => return false, // TODO: critical note once?
+            }
+            // Fallback to fstat comparison if kcmp is not available
+            unsafe {
+                let mut statfs1 = std::mem::zeroed::<libc::statfs64>();
+                let mut statfs2 = std::mem::zeroed::<libc::statfs64>();
+                if libc::fstatfs64(fd1, &mut statfs1) != 0 || libc::fstatfs64(fd2, &mut statfs2) != 0 {
+                    // TODO: critical note once?
+                    return false;
+                } else if statfs1.f_type != DMA_BUF_MAGIC || statfs2.f_type != DMA_BUF_MAGIC {
+                    // TODO: critical note once?
+                    return false;
+                }
+
+                let mut stat1 = std::mem::zeroed::<libc::stat>();
+                let mut stat2 = std::mem::zeroed::<libc::stat>();
+                if libc::fstat(fd1, &mut stat1) != 0 || libc::fstat(fd2, &mut stat2) != 0 {
+                    // TODO: critical note once?
+                    return false;
+                }
+                return stat1.st_dev == stat2.st_dev && stat1.st_ino == stat2.st_ino;
+            }
+        }
         unsafe {
             let device = self.resolve_device_id(device_id);
             let hal_device = device
                 .as_hal::<wgc::api::Vulkan>()
                 .expect("Vulkan backend device on linux");
 
-            let plane_layouts: Vec<_> = (0..info.plane_count as usize)
-                .map(|i| wgh::vulkan::DmaBufPlaneLayout {
+            let mut fds = Vec::with_capacity(info.plane_count as usize);
+            let mut planes: Vec<wgh::vulkan::DmaBufPlane> = Vec::with_capacity(info.plane_count as usize);
+
+            for (i, &fd) in info.fds.iter().enumerate().take(info.plane_count as usize) {
+                let layout = wgh::vulkan::DmaBufPlaneLayout {
                     offset: info.offsets[i],
                     stride: info.strides[i],
-                })
-                .collect();
+                };
+                if let Some(other) = fds.iter().position(|&fd2| same_fd(fd, fd2)) {
+                    planes.push(wgh::vulkan::DmaBufPlane { fd_index: other, layout });
+                } else {
+                    fds.push(fd);
+                    planes.push(wgh::vulkan::DmaBufPlane { fd_index: fds.len() - 1, layout });
+                }
+            }
 
             let hal_desc = wgh::TextureDescriptor {
                 label: None,
@@ -2041,12 +2097,12 @@ impl Global {
 
             // The image created by `wgpu_vkimage_create_with_dma_buf` used
             // `ALIAS` too.
-            let hal_texture = match hal_device.texture_from_dmabuf_fd(
-                owned_fd,
+            let hal_texture = match hal_device.texture_from_dmabuf_fds(
+                fds.into_iter().map(|fd| OwnedFd::from_raw_fd(fd)).collect(),
+                &planes,
                 &hal_desc,
                 info.modifier,
-                &plane_layouts,
-                /* alias */ true,
+                alias,
             ) {
                 Ok(hal_texture) => hal_texture,
                 Err(err) => {
@@ -2172,18 +2228,12 @@ impl Global {
                 return Some(guard);
             }
 
-            // Ensure we close file descriptors
-            let owned_fd = OwnedFd::from_raw_fd(info.fds[0]);
-            let _ = OwnedFd::from_raw_fd(info.fds[1]);
-            let _ = OwnedFd::from_raw_fd(info.fds[2]);
-            let _ = OwnedFd::from_raw_fd(info.fds[3]);
-
             self.create_texture_with_imported_dmabuf(
                 device_id,
                 texture_id,
                 &desc,
-                owned_fd,
                 &info,
+                false, // !alias
                 guard,
             )
         }
@@ -3452,6 +3502,35 @@ pub unsafe extern "C" fn wgpu_server_device_wait_fence_from_shared_handle(
 
     let res = hal_queue.as_raw().Wait(&fence, fence_value);
     res.is_ok()
+}
+
+/// Imports a Vulkan texture from a DMABuf file descriptor.
+///
+/// On success, assumes ownership of passed file descriptor(s). They
+/// are closed when the texture is freed.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn wgpu_server_device_import_texture_from_dmabuf(
+    global: &Global,
+    device_id: id::DeviceId,
+    id_in: id::TextureId,
+    desc: &FfiTextureDescriptor,
+    info: &DMABufInfo,
+) {
+    let desc = desc.to_wgpu();
+
+    // On errors, the scope guard will create an invalid texture.
+    // We do not otherwise care.
+    let _ = global.create_texture_with_imported_dmabuf(
+        device_id,
+        id_in,
+        &desc,
+        info,
+        true, // alias
+        guard((), |_| {
+            global.create_texture_error(device_id, id_in, &desc);
+        }),
+    );
 }
 
 #[cfg(target_os = "macos")]

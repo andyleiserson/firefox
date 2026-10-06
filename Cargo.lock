@@ -9527,6 +9527,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "glean",
+ "libc",
  "log",
  "moz_task",
  "nsstring",

@@ -105,26 +105,6 @@ extern void* wgpu_server_get_shared_texture_handle(WGPUWebGPUParentPtr aParent,
 #endif
 
 #if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
-extern int32_t wgpu_server_get_dma_buf_fd(WGPUWebGPUParentPtr aParent,
-                                          WGPUTextureId aId) {
-  auto* parent = static_cast<WebGPUParent*>(aParent);
-
-  auto texture = parent->GetSharedTexture(aId);
-  if (!texture) {
-    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    return -1;
-  }
-
-  auto* textureDMABuf = texture->AsSharedTextureDMABuf();
-  if (!textureDMABuf) {
-    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    return -1;
-  }
-  auto fd = textureDMABuf->CloneDmaBufFd();
-  // fd should be closed by the caller.
-  return fd.release();
-}
-
 extern "C" bool wgpu_server_get_linux_dmabuf_modifiers(
     const uint64_t** aModifiers, uint32_t* aModifierCount) {
   if (!aModifiers || !aModifierCount) {
@@ -148,23 +128,41 @@ extern "C" bool wgpu_server_get_linux_dmabuf_modifiers(
 #endif
 
 #if defined(XP_LINUX) && !defined(MOZ_WIDGET_ANDROID)
+/**
+ * Retrieve the metadata and file descriptors for a `SharedTextureDMABuf`.
+ *
+ * The caller assumes ownership of (i.e. responsibility for closing) the file descriptors
+ * if `is_valid` is true.
+ */
 extern ffi::WGPUDMABufInfo wgpu_server_get_dma_buf_info(
     WGPUWebGPUParentPtr aParent, WGPUTextureId aId) {
-  ffi::WGPUDMABufInfo info = {};
-
   auto* parent = static_cast<WebGPUParent*>(aParent);
 
   auto texture = parent->GetSharedTexture(aId);
   if (!texture) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    return info;
+    return ffi::WGPUDMABufInfo();
   }
 
   auto* textureDMABuf = texture->AsSharedTextureDMABuf();
   if (!textureDMABuf) {
-    return info;
+    return ffi::WGPUDMABufInfo();
   }
-  return textureDMABuf->GetDMABufInfo();
+
+  auto srcInfo = textureDMABuf->GetDMABufInfo();
+  std::array<detail::FileHandleType, 4> fds;
+  if (srcInfo.is_valid) {
+    fds = textureDMABuf->CloneDmaBufFds();
+  }
+
+  return ffi::WGPUDMABufInfo {
+      .is_valid = srcInfo.is_valid,
+      .modifier = srcInfo.modifier,
+      .plane_count = srcInfo.plane_count,
+      .offsets = {srcInfo.offsets[0], srcInfo.offsets[1], srcInfo.offsets[2], srcInfo.offsets[3]},
+      .strides = {srcInfo.strides[0], srcInfo.strides[1], srcInfo.strides[2], srcInfo.strides[3]},
+      .fds = {fds[0], fds[1], fds[2], fds[3]},
+  };
 }
 #endif
 

@@ -33,9 +33,16 @@ class DMABUFTextureHostOGL : public TextureHost {
 
   gfx::IntSize GetSize() const override;
 
+  DMABufSurface* GetDMABufSurface() const { return mSurface; }
+
 #ifdef MOZ_LAYERS_HAVE_LOG
   const char* Name() override { return "DMABUFTextureHostOGL"; }
 #endif
+
+  DMABUFTextureHostOGL* AsDMABUFTextureHost() override {
+    return this;
+  }
+
   uint32_t NumSubTextures() override;
 
   gfx::YUVColorSpace GetYUVColorSpace() const override;

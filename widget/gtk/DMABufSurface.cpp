@@ -6,6 +6,7 @@
 
 #include "DMABufDevice.h"
 #include "DMABufFormats.h"
+#include "mozilla/widget/BufferSurface.h"
 
 #ifdef MOZ_WAYLAND
 #  include "nsWaylandDisplay.h"
@@ -1107,9 +1108,8 @@ bool DMABufSurfaceRGBA::Create(mozilla::gl::GLContext* aGLContext,
 }
 
 bool DMABufSurfaceRGBA::Create(
-    RefPtr<mozilla::gfx::FileHandleWrapper>&& aFd,
-    const mozilla::webgpu::ffi::WGPUDMABufInfo& aDMABufInfo, int aWidth,
-    int aHeight) {
+    std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES>&& aFds,
+    const DMABufInfo& aDMABufInfo, int aWidth, int aHeight) {
   LOGDMABUF("DMABufSurfaceRGBA::CreateWGPUDMABufInfo() UID %d size %d x %d\n",
             mUID, mWidth[0], mHeight[0]);
 
@@ -1121,10 +1121,9 @@ bool DMABufSurfaceRGBA::Create(
   mFOURCCFormat = GBM_FORMAT_ARGB8888;
   mBufferPlaneCount = aDMABufInfo.plane_count;
 
-  RefPtr<gfx::FileHandleWrapper> fd = std::move(aFd);
+  mDmabufFds = std::move(aFds);
 
   for (uint32_t i = 0; i < aDMABufInfo.plane_count; i++) {
-    mDmabufFds[i] = fd;
     mStrides[i] = aDMABufInfo.strides[i];
     mOffsets[i] = aDMABufInfo.offsets[i];
   }
@@ -1312,6 +1311,19 @@ bool DMABufSurfaceRGBA::CreateTexture(GLContext* aGLContext, int aPlane) {
 
   releaseTextures.release();
   return true;
+}
+
+DMABufInfo DMABufSurfaceRGBA::GetDMABufInfo() {
+  auto info = DMABufInfo {
+    .is_valid = true,
+    .modifier = mBufferModifier,
+    .plane_count = uint32_t(mBufferPlaneCount),
+  };
+  for (int i = 0; i < mBufferPlaneCount; i++) {
+    info.strides[i] = mStrides[i];
+    info.offsets[i] = mOffsets[i];
+  }
+  return info;
 }
 
 void DMABufSurfaceRGBA::ReleaseSurface() {
@@ -1527,11 +1539,10 @@ already_AddRefed<DMABufSurfaceRGBA> DMABufSurfaceRGBA::CreateDMABufSurface(
 }
 
 already_AddRefed<DMABufSurface> DMABufSurfaceRGBA::CreateDMABufSurface(
-    RefPtr<mozilla::gfx::FileHandleWrapper>&& aFd,
-    const mozilla::webgpu::ffi::WGPUDMABufInfo& aDMABufInfo, int aWidth,
-    int aHeight) {
+    std::array<RefPtr<mozilla::gfx::FileHandleWrapper>, BUFFER_SURFACE_PLANES>&& aFds,
+    const DMABufInfo& aDMABufInfo, int aWidth, int aHeight) {
   auto surf = MakeRefPtr<DMABufSurfaceRGBA>();
-  if (!surf->Create(std::move(aFd), aDMABufInfo, aWidth, aHeight)) {
+  if (!surf->Create(std::move(aFds), aDMABufInfo, aWidth, aHeight)) {
     return nullptr;
   }
   return surf.forget();
@@ -2261,6 +2272,19 @@ bool DMABufSurfaceYUV::CreateTextureViaCopyYUV(GLContext* aGLContext,
                                 0, mWidth[aPlane], mHeight[aPlane], 1);
   aGLContext->fDeleteTextures(1, &srcTex);
   return aGLContext->fGetError() == 0;
+}
+
+DMABufInfo DMABufSurfaceYUV::GetDMABufInfo() {
+  auto info = DMABufInfo {
+    .is_valid = true,
+    .modifier = mBufferModifiers[0],
+    .plane_count = uint32_t(mBufferPlaneCount),
+  };
+  for (int i = 0; i < mBufferPlaneCount; i++) {
+    info.strides[i] = mStrides[i];
+    info.offsets[i] = mOffsets[i];
+  }
+  return info;
 }
 
 bool DMABufSurfaceYUV::VerifyTextureCreation() {

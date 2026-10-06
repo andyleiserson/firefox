@@ -31,6 +31,7 @@ class DXGITextureHostD3D11;
 class DXGIYCbCrTextureHostD3D11;
 class Image;
 class MacIOSurfaceTextureHostOGL;
+class DMABUFTextureHostOGL;
 }  // namespace layers
 
 namespace webgpu {
@@ -259,6 +260,10 @@ class ExternalTextureSourceHost {
       WebGPUParent* aParent, RawId aDeviceId,
       const ExternalTextureSourceDescriptor& aDesc,
       const layers::MacIOSurfaceTextureHostOGL* aTextureHost);
+  static ExternalTextureSourceHost CreateFromDMABUFTextureHost(
+      WebGPUParent* aParent, RawId aDeviceId,
+      const ExternalTextureSourceDescriptor& aDesc,
+      layers::DMABUFTextureHostOGL* aTextureHost);
 
   // Creates an external texture source in an error state that will be
   // propagated to any external textures created from it.

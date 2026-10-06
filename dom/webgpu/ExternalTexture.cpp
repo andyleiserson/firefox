@@ -33,6 +33,10 @@
 #  include "mozilla/gfx/MacIOSurface.h"
 #  include "mozilla/layers/MacIOSurfaceTextureHostOGL.h"
 #endif
+#ifdef XP_LINUX
+#  include "mozilla/widget/DMABufSurface.h"
+#  include "mozilla/layers/DMABUFTextureHostOGL.h"
+#endif
 
 namespace mozilla::webgpu {
 
@@ -472,9 +476,14 @@ ExternalTextureSourceHost::ExternalTextureSourceHost(
                      textureHost->AsMacIOSurfaceTextureHost()) {
         return CreateFromMacIOSurfaceTextureHost(aParent, aDeviceId, aDesc,
                                                  ioSurfHost);
+      } else if (auto* dmaBufHost =
+                      textureHost->AsDMABUFTextureHost()) {
+        return CreateFromDMABUFTextureHost(aParent, aDeviceId, aDesc,
+                                                  dmaBufHost);
       } else {
         gfxCriticalErrorOnce()
-            << "Unexpected SurfaceDescriptorGPUVideo TextureHost type";
+            << "Unexpected SurfaceDescriptorGPUVideo TextureHost type "
+            << int8_t(textureHost->GetTextureHostType());
         return CreateError();
       }
     } break;
@@ -960,6 +969,132 @@ ExternalTextureSourceHost::CreateFromMacIOSurfaceTextureHost(
   return ExternalTextureSourceHost(usedTextureIds, usedViewIds, aDesc.mSize,
                                    format, colorSpace, aDesc.mSampleTransform,
                                    aDesc.mLoadTransform);
+#else
+  MOZ_CRASH();
+#endif
+}
+
+/* static */ ExternalTextureSourceHost
+ExternalTextureSourceHost::CreateFromDMABUFTextureHost(
+    WebGPUParent* aParent, RawId aDeviceId,
+    const ExternalTextureSourceDescriptor& aDesc,
+    layers::DMABUFTextureHostOGL* aTextureHost) {
+#ifdef XP_LINUX
+  const RefPtr<DMABufSurface> surface = aTextureHost->GetDMABufSurface();
+  if (!surface) {
+    gfxCriticalErrorOnce() << "Failed to lookup DMABufSurface";
+    return CreateError();
+  }
+
+  // mGpuFence should be null. It is only required to synchronize GPU reads
+  // from an IOSurface following GPU writes, e.g. when an IOSurface is used for
+  // WebGPU presentation. In our case the IOSurface has been written to from
+  // the CPU or obtained from a CVPixelBuffer, and no additional synchronization
+  // is required.
+  // TODO
+  //MOZ_ASSERT(aTextureHost->GetSurfaceDescriptor().fencesHolderId().isNothing());
+
+  const gfx::SurfaceFormat format = surface->GetFormat();
+  const gfx::YUVRangedColorSpace colorSpace = gfx::ToYUVRangedColorSpace(
+      surface->GetYUVColorSpace(), gfx::ColorRange::LIMITED,
+      surface->GetTransferFunction());
+
+  // TODO: DMABufSurface returns the same width for all planes, which is dubious.
+  // (except, may not have been careful about which derived class I was looking at)
+  auto size = ffi::WGPUExtent3d {
+        .width = static_cast<uint32_t>(surface->GetWidth()),
+        .height = static_cast<uint32_t>(surface->GetHeight()),
+        .depth_or_array_layers = 1,
+  };
+
+  ffi::WGPUTextureFormat textureFormat;
+  AutoTArray<std::pair<ffi::WGPUTextureFormat, ffi::WGPUTextureAspect>, 2>
+      viewFormatAndAspects;
+  switch (format) {
+    case gfx::SurfaceFormat::R8G8B8A8:
+    case gfx::SurfaceFormat::R8G8B8X8:
+      textureFormat = {ffi::WGPUTextureFormat_Rgba8Unorm};
+      viewFormatAndAspects.AppendElement(
+          std::make_pair(textureFormat, ffi::WGPUTextureAspect_All));
+      break;
+    case gfx::SurfaceFormat::B8G8R8A8:
+    case gfx::SurfaceFormat::B8G8R8X8:
+      textureFormat = {ffi::WGPUTextureFormat_Bgra8Unorm};
+      viewFormatAndAspects.AppendElement(
+          std::make_pair(textureFormat, ffi::WGPUTextureAspect_All));
+      break;
+    case gfx::SurfaceFormat::NV12:
+      textureFormat = {ffi::WGPUTextureFormat_NV12};
+      viewFormatAndAspects.AppendElement(
+          std::make_pair(ffi::WGPUTextureFormat{ffi::WGPUTextureFormat_R8Unorm},
+                         ffi::WGPUTextureAspect_Plane0));
+      viewFormatAndAspects.AppendElement(std::make_pair(
+          ffi::WGPUTextureFormat{ffi::WGPUTextureFormat_Rg8Unorm},
+          ffi::WGPUTextureAspect_Plane1));
+      break;
+    default:
+      gfxCriticalErrorOnce() << "Unsupported IOSurface format: " << format;
+      return CreateError();
+  }
+
+  AutoTArray<RawId, 1> usedTextureIds = {aDesc.mTextureIds[0]};
+  AutoTArray<RawId, 2> usedViewIds;
+
+  const ffi::WGPUFfiTextureDescriptor textureDesc{
+      .size = size,
+      .mip_level_count = 1,
+      .sample_count = 1,
+      .dimension = ffi::WGPUTextureDimension_D2,
+      .format = textureFormat,
+      .usage = WGPUTextureUsages_TEXTURE_BINDING,
+      .view_formats = {},
+  };
+
+  DMABufInfo srcInfo = surface->GetDMABufInfo();
+
+  MOZ_ASSERT(srcInfo.is_valid);
+  // TODO: if !srcInfo.is_valid, probably we should construct an invalid texture?
+
+  auto fds = surface->GetDMABufFds();
+
+  auto info = ffi::WGPUDMABufInfo {
+    .is_valid = srcInfo.is_valid,
+    .modifier = srcInfo.modifier,
+    .plane_count = srcInfo.plane_count,
+  };
+
+  for (size_t i = 0; i < srcInfo.plane_count; i++) {
+    info.offsets[i] = srcInfo.offsets[i];
+    info.strides[i] = srcInfo.strides[i];
+    info.fds[i] = fds[i]->ClonePlatformHandle().release();
+  }
+
+  ffi::wgpu_server_device_import_texture_from_dmabuf(
+      aParent->GetContext(), aDeviceId, usedTextureIds[0],
+      &textureDesc, &info
+  );
+  // From here on there's no need to return early with `CreateError()` in
+  // case of an error, as an error creating a texture or view will be
+  // propagated to any views or external textures created from them.
+  // Since we have full control over the creation of this texture, any
+  // validation error we encounter should be treated as an internal error.
+  for (size_t i = 0; i < viewFormatAndAspects.Length(); i++) {
+    auto [format, aspect] = viewFormatAndAspects[i];
+    ffi::WGPUFfiTextureViewDescriptor viewDesc{
+        .format = &format,
+        .aspect = aspect,
+    };
+    {
+      ffi::wgpu_server_texture_create_view(aParent->GetContext(), aDeviceId,
+                                           usedTextureIds[0], aDesc.mViewIds[i],
+                                           &viewDesc);
+    }
+    usedViewIds.AppendElement(aDesc.mViewIds[i]);
+  }
+  ExternalTextureSourceHost source(
+      usedTextureIds, usedViewIds, aDesc.mSize, format,
+      colorSpace, aDesc.mSampleTransform, aDesc.mLoadTransform);
+  return source;
 #else
   MOZ_CRASH();
 #endif
